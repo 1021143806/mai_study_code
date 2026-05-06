@@ -1,0 +1,39 @@
+{
+  "manifest_version": 2,
+  "version": "0.1.0",
+  "name": "麦麦学代码 (Mai Study Code)",
+  "description": "麦麦的代码学习伙伴，不是工具而是陪你一起成长的同路人。从零开始学代码，会自己写笔记、攒经验，不懂就问，有风险就提醒。",
+  "author": {
+    "name": "MaiBot开发团队",
+    "url": "https://github.com/MaiM-with-u"
+  },
+  "license": "GPL-v3.0-or-later",
+  "urls": {
+    "repository": "https://github.com/MaiM-with-u/maibot",
+    "homepage": "https://github.com/MaiM-with-u/maibot",
+    "documentation": "https://github.com/MaiM-with-u/maibot",
+    "issues": "https://github.com/MaiM-with-u/maibot/issues"
+  },
+  "host_application": {
+    "min_version": "1.0.0",
+    "max_version": "1.0.0"
+  },
+  "sdk": {
+    "min_version": "2.0.0",
+    "max_version": "2.99.99"
+  },
+  "dependencies": [],
+  "capabilities": [
+    "send.text",
+    "send.hybrid",
+    "config.get"
+  ],
+  "i18n": {
+    "default_locale": "zh-CN",
+    "locales_path": "_locales",
+    "supported_locales": [
+      "zh-CN"
+    ]
+  },
+  "id": "maibot-team.mai-study-code"
+}

@@ -1,0 +1,24 @@
+[plugin]
+enabled = false
+config_version = "0.1.0"
+
+[sandbox]
+max_memory_mb = 128
+max_timeout_sec = 15
+max_output_chars = 10000
+
+[cache]
+enabled = true
+max_entries = 500
+ttl_seconds = 3600
+similarity_threshold = 0.75
+
+[risk]
+require_confirmation_medium = true
+require_confirmation_high = true
+block_critical = true
+
+[learner]
+enabled = true
+auto_save_notes = false
+knowledge_dir = "knowledge"
