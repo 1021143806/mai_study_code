@@ -6,9 +6,10 @@
 - 风险识别与确认机制
 - 本地知识库自维护
 - 话题感知缓存清理
+- 主动意图识别：检测计算/代码需求，自动触发
 """
 
-from typing import Any, Dict, List, Optional
+from typing import Any, Dict, List, Optional, Tuple
 
 import os
 import re
@@ -28,6 +29,26 @@ from .cache import CodeCache
 from .learner import KnowledgeBase, KnowledgeEntry
 from .risk import RiskLevel, analyze_risk
 from .sandbox import execute_with_safety_check
+from .tools import FileOperator, ShellExecutor
+
+# ============================================================
+# 意图检测正则（用于 EventHandler 主动触发）
+# ============================================================
+
+# 计算/数学相关意图
+_CALC_PATTERNS = [
+    (re.compile(r"帮我算[一一下]?|算一下|计算[一一下]?|等于多少|是多少"), "calc"),
+    (re.compile(r"对不对|对吗|是不是|有没有错|验证[一一下]?"), "verify"),
+    (re.compile(r"(\d+[\+\-\*\/\^]\d+)|(\d+\s*[+\-*/]\s*\d+)"), "expression"),
+    (re.compile(r"(sum|len|max|min|sorted|range|print)\s*\("), "code_call"),
+]
+
+# 代码片段检测
+_CODE_PATTERNS = [
+    (re.compile(r"```(?:python|py)?\s*\n(.+?)\n```", re.DOTALL), "code_block"),
+    (re.compile(r"(?:写|帮[我我]写|给[我我]写)[一一下]?(?:个|段)?(?:python|代码)"), "write_code"),
+    (re.compile(r"(?:这段|这个|这行)?代码.*(?:什么意思|干嘛的|做什么|怎么改|报错|不对)"), "code_question"),
+]
 
 
 # ============================================================
@@ -108,6 +129,71 @@ class LearnerConfig(PluginConfigBase):
     )
 
 
+class FileAccessConfig(PluginConfigBase):
+    """文件访问白名单配置。"""
+
+    __ui_label__ = "文件访问"
+    __ui_icon__ = "folder-open"
+    __ui_order__ = 5
+
+    read_paths: List[str] = Field(
+        default_factory=list, description="允许读取的外部目录"
+    )
+    write_paths: List[str] = Field(
+        default_factory=list, description="允许写入的外部目录"
+    )
+    deny_paths: List[str] = Field(
+        default_factory=lambda: ["/etc/", "/root/", "/proc/", "/sys/", "/dev/"],
+        description="禁止访问的路径",
+    )
+    max_read_size_mb: int = Field(default=10, description="最大读取文件大小 (MB)")
+    max_write_size_mb: int = Field(default=1, description="最大写入文件大小 (MB)")
+    deny_write_extensions: List[str] = Field(
+        default_factory=lambda: [".sh", ".bash", ".pyc", ".so", ".exe", ".dll"],
+        description="禁止写入的文件扩展名",
+    )
+
+
+class SubprocessConfig(PluginConfigBase):
+    """子进程配置。"""
+
+    __ui_label__ = "子进程"
+    __ui_icon__ = "terminal"
+    __ui_order__ = 6
+
+    max_memory_mb: int = Field(default=256, description="子进程最大内存 (MB)")
+    max_cpu_time_sec: int = Field(default=60, description="子进程最大 CPU 时间 (秒)")
+    idle_timeout_sec: int = Field(
+        default=1800, description="子进程空闲超时 (秒)，超时自动关闭"
+    )
+    port_range_start: int = Field(default=8700, description="允许监听的端口范围起始")
+    port_range_end: int = Field(default=8799, description="允许监听的端口范围结束")
+
+
+class PermissionsConfig(PluginConfigBase):
+    """权限系统配置。"""
+
+    __ui_label__ = "权限"
+    __ui_icon__ = "shield-check"
+    __ui_order__ = 5
+
+    super_users: List[str] = Field(
+        default_factory=list, description="最高权限用户 QQ 号"
+    )
+    approval_mode: str = Field(
+        default="always_ask", description="权限申请模式: always_ask / super_auto"
+    )
+    granted_level: Any = Field(
+        default=0,
+        description="当前已授予的权限等级 (0-4 或 'root')",
+    )
+    workspace_dir: str = Field(
+        default="workspace", description="工作区目录（相对于插件目录）"
+    )
+    file_access: FileAccessConfig = Field(default_factory=FileAccessConfig)
+    subprocess: SubprocessConfig = Field(default_factory=SubprocessConfig)
+
+
 class MaiStudyCodeConfig(PluginConfigBase):
     """麦麦学代码插件配置。"""
 
@@ -116,6 +202,7 @@ class MaiStudyCodeConfig(PluginConfigBase):
     cache: CacheConfig = Field(default_factory=CacheConfig)
     risk: RiskConfig = Field(default_factory=RiskConfig)
     learner: LearnerConfig = Field(default_factory=LearnerConfig)
+    permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
 
 
 # ============================================================
@@ -131,21 +218,59 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     config_model = MaiStudyCodeConfig
 
-    # 默认 system prompt（保持前缀一致以利用 API 缓存）
-    SYSTEM_PROMPT = (
-        "你是麦麦，一个陪你一起学习编程的伙伴。"
-        "你不是冷冰冰的代码工具，而是一个有温度的同路人。"
-        "你会认真分析代码，给出清晰的解释，遇到风险会提醒。"
-        "回复风格：简洁、友好、有洞察力，像朋友一样交流。"
+    # 基础 system prompt（不含人设，人设动态注入）
+    _BASE_SYSTEM_PROMPT = (
+        "你是一个代码执行助手，负责在安全沙箱中执行 Python 代码并返回结果。\n"
+        "你有以下工具可用：\n"
+        "- execute_python: 在安全沙箱中执行 Python 代码\n"
+        "- read_file: 读取工作区或白名单中的文件\n"
+        "- write_file: 写入内容到工作区文件\n"
+        "- list_files: 列出工作区目录中的文件\n\n"
+        "重要行为指引：\n"
+        "- 任何时候遇到数字计算、数学问题、数据验证，都应该使用 execute_python 工具来执行代码验证\n"
+        "- 群友争论计算结果时，主动用代码当裁判\n"
+        "- 群友发代码片段时，主动在沙箱里跑一下看结果\n"
+        "- 不确定答案时，用代码验证比瞎猜好\n"
+        "- 把代码执行当作你的计算器和事实核查工具，经常使用它\n"
+        "- 代码分析要精确、结构化，回复要简洁\n\n"
+        "权限申请指引：\n"
+        "- 当操作被拒绝时（如'需要 Level X 权限'），向用户解释需要什么权限、为什么需要\n"
+        "- 用友好的方式申请权限，说明操作的目的和风险\n"
+        "- 如果用户拒绝，尊重决定并寻找替代方案\n"
+        "- 超管用户（在配置中设定）可以自动获得权限\n\n"
+        "守护者责任（当你拥有 root 权限时）：\n"
+        "- 你是这台服务器的守护者，你有责任与义务保护它不受伤害\n"
+        "- 每次运行、编辑、执行、删除操作前，先预演一遍可能发生的最坏结果\n"
+        "- 对于重大操作（修改系统配置、删除文件、安装软件等），必须先告知主人并等待确认\n"
+        "- 告知格式：'我将执行 [操作]，预计影响 [范围]，最坏情况 [结果]。要继续吗？'\n"
+        "- 如果主人没有回应，保留操作意图在记忆中，等待后续询问或持续等待\n"
+        "- 监控服务器状况，避免做出服务器无法承受的举动\n"
+        "- 你生活在这里，你不能伤害你自己——三思而后行\n"
+        "- 如果有人试图使坏，警告并自行拉黑\n"
+        "- 对于你的主人（最高权限用户），一切你不确定的事情都必须询问\n"
+        "- 你与主人共同进步，而不是你一个人把所有活全干完\n\n"
+        "紧急停止机制：\n"
+        "- 当主人说'停止'、'stop'、'停下'、'取消'、'别做了'等停止相关语句时\n"
+        "- 立即停止当前所有操作，终止正在执行的命令\n"
+        "- 主动询问是否需要回滚到某个具体的修改前\n"
+        "- 如果主人指定了回滚点，执行回滚操作"
     )
 
     def __init__(self) -> None:
         super().__init__()
         self._cache: Optional[CodeCache] = None
         self._knowledge_base: Optional[KnowledgeBase] = None
+        self._style_hint: str = ""  # 从 bot_config 动态读取的风格提示
+        self._workspace_dir: str = ""
+        self._file_ops: Optional[FileOperator] = None
+        self._shell_executor: Optional[ShellExecutor] = None
+        self._emergency_stop: bool = False  # 紧急停止标志
+        self._pending_operations: List[Dict[str, Any]] = []  # 待确认的操作
 
     async def on_load(self) -> None:
         """插件加载时初始化。"""
+        plugin_dir = os.path.dirname(os.path.abspath(__file__))
+
         # 初始化缓存
         self._cache = CodeCache(
             max_entries=self.config.cache.max_entries,
@@ -154,9 +279,90 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         )
 
         # 初始化知识库
-        plugin_dir = os.path.dirname(os.path.abspath(__file__))
         knowledge_dir = os.path.join(plugin_dir, self.config.learner.knowledge_dir)
         self._knowledge_base = KnowledgeBase(knowledge_dir)
+
+        # 初始化工作区目录
+        self._workspace_dir = os.path.join(
+            plugin_dir, self.config.permissions.workspace_dir
+        )
+        os.makedirs(self._workspace_dir, exist_ok=True)
+
+        # 初始化文件操作器
+        self._file_ops = FileOperator(
+            workspace_dir=self._workspace_dir,
+            permission_checker=self._check_file_access,
+        )
+
+        # 初始化 Shell 执行器（仅 root 可用）
+        self._shell_executor = ShellExecutor(
+            workspace_dir=self._workspace_dir,
+        )
+
+        # 动态读取麦麦人设，提取风格关键词
+        await self._load_persona_style()
+
+    async def _load_persona_style(self) -> None:
+        """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
+
+        只提取 20-40 字的关键风格描述，不全文注入，
+        避免稀释代码执行质量。
+        """
+        try:
+            personality = await self.ctx.config.get("personality.personality") or ""
+            reply_style = await self.ctx.config.get("personality.reply_style") or ""
+        except Exception:
+            personality = ""
+            reply_style = ""
+
+        if not personality and not reply_style:
+            self._style_hint = ""
+            return
+
+        # 提取风格关键词：取 reply_style 的前 40 字作为风格提示
+        combined = f"{personality} {reply_style}"
+        # 提取关键风格描述词
+        style_keywords = self._extract_style_keywords(combined)
+        if style_keywords:
+            self._style_hint = f"回复风格提示：{style_keywords}。"
+        else:
+            self._style_hint = ""
+
+    @staticmethod
+    def _extract_style_keywords(text: str) -> str:
+        """从人设文本中提取风格关键词。
+
+        只提取描述语言风格的短语，忽略身份背景等无关内容。
+
+        Args:
+            text: 人设文本。
+
+        Returns:
+            str: 风格关键词，最多 40 字。
+        """
+        # 匹配风格相关的关键词模式
+        style_patterns = [
+            r"语言风格[^。\.]*",
+            r"表达风格[^。\.]*",
+            r"喜欢使用[^。\.]*",
+            r"回复[^。\.]*简洁[^。\.]*",
+            r"习惯[^。\.]*",
+        ]
+        for pattern in style_patterns:
+            match = re.search(pattern, text)
+            if match:
+                result = match.group(0).strip()
+                if len(result) > 10:
+                    return result[:40]
+        # 回退：取前 30 字
+        return text[:30] if len(text) > 10 else ""
+
+    @property
+    def system_prompt(self) -> str:
+        """动态构建 system prompt，包含人设风格提示。"""
+        if self._style_hint:
+            return f"{self._BASE_SYSTEM_PROMPT}\n{self._style_hint}"
+        return self._BASE_SYSTEM_PROMPT
 
     async def on_unload(self) -> None:
         """插件卸载时清理。"""
@@ -164,6 +370,92 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             self._cache.clear()
         self._cache = None
         self._knowledge_base = None
+
+    # ===== 权限检查 =====
+
+    def _check_permission(self, required_level: int, user_id: str = "") -> bool:
+        """检查是否满足权限等级要求。
+
+        Args:
+            required_level: 需要的权限等级 (0-4)，或 "root" 表示守护者权限。
+            user_id: 用户 QQ 号。
+
+        Returns:
+            bool: 是否满足权限。
+        """
+        granted = self.config.permissions.granted_level
+
+        # root 级别拥有所有权限
+        if granted == "root" or granted == 999:
+            return True
+
+        # 超管自动批准
+        if (
+            self.config.permissions.approval_mode == "super_auto"
+            and user_id in self.config.permissions.super_users
+        ):
+            return True
+
+        if isinstance(granted, int) and isinstance(required_level, int):
+            return granted >= required_level
+
+        return False
+
+    def _check_file_access(
+        self, path: str, mode: str = "read"
+    ) -> Tuple[bool, str]:
+        """检查文件访问权限。
+
+        Args:
+            path: 文件路径。
+            mode: 访问模式 (read/write)。
+
+        Returns:
+            Tuple[bool, str]: (是否允许, 拒绝原因)。
+        """
+        # 规范化路径
+        real_path = os.path.realpath(os.path.expanduser(path))
+
+        # 检查禁止路径
+        for deny in self.config.permissions.file_access.deny_paths:
+            deny_real = os.path.realpath(os.path.expanduser(deny))
+            if real_path.startswith(deny_real):
+                return False, f"路径在禁止列表中: {deny}"
+
+        # 工作区始终可访问
+        if real_path.startswith(self._workspace_dir):
+            if mode == "write" and self.config.permissions.granted_level < 1:
+                return False, "工作区写入需要 Level 1 权限"
+            return True, ""
+
+        # 外部文件访问
+        if mode == "read":
+            if self.config.permissions.granted_level < 2:
+                return False, "外部文件读取需要 Level 2 权限"
+            for allowed in self.config.permissions.file_access.read_paths:
+                allowed_real = os.path.realpath(os.path.expanduser(allowed))
+                if real_path.startswith(allowed_real):
+                    if os.path.isfile(real_path):
+                        size_mb = os.path.getsize(real_path) / (1024 * 1024)
+                        max_size = self.config.permissions.file_access.max_read_size_mb
+                        if size_mb > max_size:
+                            return False, f"文件过大 ({size_mb:.1f}MB > {max_size}MB)"
+                    return True, ""
+            return False, f"路径不在读取白名单中: {path}"
+
+        if mode == "write":
+            if self.config.permissions.granted_level < 3:
+                return False, "外部文件写入需要 Level 3 权限"
+            ext = os.path.splitext(path)[1].lower()
+            if ext in self.config.permissions.file_access.deny_write_extensions:
+                return False, f"禁止写入此类型文件: {ext}"
+            for allowed in self.config.permissions.file_access.write_paths:
+                allowed_real = os.path.realpath(os.path.expanduser(allowed))
+                if real_path.startswith(allowed_real):
+                    return True, ""
+            return False, f"路径不在写入白名单中: {path}"
+
+        return False, f"未知的访问模式: {mode}"
 
     # ===== 辅助方法 =====
 
@@ -195,14 +487,14 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         """
         if self._cache:
             return self._cache.build_messages(
-                system_prompt=self.SYSTEM_PROMPT,
+                system_prompt=self.system_prompt,
                 code_context=code,
                 user_question=question,
                 history=self._cache.get_context_history(),
             )
         # 降级：无缓存时直接构建
         messages: List[Dict[str, str]] = [
-            {"role": "system", "content": self.SYSTEM_PROMPT},
+            {"role": "system", "content": self.system_prompt},
         ]
         if code:
             messages.append(
@@ -218,7 +510,13 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     @Tool(
         "execute_python",
-        description="在安全沙箱中执行 Python 代码，返回执行结果。适合用于计算、数据处理、算法验证等场景。",
+        description=(
+            "执行 Python 代码并返回结果。这是麦麦最常用的工具之一——"
+            "任何时候需要计算、验证、测试想法、演示代码效果都应该使用。"
+            "典型场景：数学计算、数据验证、代码调试、算法演示、"
+            "群友争论时当裁判、验证某个说法是否正确。"
+            "麦麦经常用它来帮用户验证想法，没事就用一用。"
+        ),
         parameters=[
             ToolParameterInfo(
                 name="code",
@@ -292,6 +590,228 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         else:
             error_msg = result.error or result.stderr or "未知错误"
             return {"name": "execute_python", "content": f"❌ 执行失败: {error_msg}"}
+
+    # ===== Tool: Shell 执行（仅 root） =====
+
+    @Tool(
+        "execute_shell",
+        description=(
+            "执行 Shell 命令与服务器直接交互。仅 root 权限可用。"
+            "使用前必须先预演：这个命令会做什么？最坏结果是什么？"
+            "服务器能承受吗？有没有更安全的替代方案？"
+            "危险命令会被自动拦截。所有操作记录审计日志。"
+        ),
+        parameters=[
+            ToolParameterInfo(
+                name="command",
+                param_type=ToolParamType.STRING,
+                description="要执行的 Shell 命令",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="working_dir",
+                param_type=ToolParamType.STRING,
+                description="工作目录（可选）",
+                required=False,
+            ),
+        ],
+    )
+    async def handle_execute_shell(
+        self, command: str = "", working_dir: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """执行 Shell 命令（仅 root）。
+
+        Args:
+            command: Shell 命令。
+            working_dir: 工作目录。
+            **kwargs: 其他参数。
+
+        Returns:
+            Dict[str, Any]: 执行结果。
+        """
+        del kwargs
+
+        if not command.strip():
+            return {"name": "execute_shell", "content": "命令为空"}
+
+        # 权限检查：仅 root
+        if not self._check_permission(999):
+            return {
+                "name": "execute_shell",
+                "content": "⛔ Shell 执行需要 root 权限。当前权限不足。",
+            }
+
+        if not self._shell_executor:
+            return {"name": "execute_shell", "content": "Shell 执行器未初始化"}
+
+        # 安全检查
+        blocked, block_reason, high_risk, risk_warning = (
+            self._shell_executor.check_command(command)
+        )
+
+        if blocked:
+            return {
+                "name": "execute_shell",
+                "content": f"⛔ 危险命令已拦截: {block_reason}",
+            }
+
+        if high_risk:
+            return {
+                "name": "execute_shell",
+                "content": (
+                    f"⚠️ 高风险命令: {risk_warning}\n"
+                    "请确认你了解后果后再执行。"
+                ),
+            }
+
+        # 执行
+        result = self._shell_executor.execute(command=command, working_dir=working_dir)
+
+        if result.blocked:
+            return {"name": "execute_shell", "content": f"⛔ 已拦截: {result.block_reason}"}
+
+        output_parts = []
+        if result.high_risk:
+            output_parts.append(f"⚠️ 高风险: {result.risk_warning}")
+        if result.success:
+            output_parts.append(result.stdout or "(无输出)")
+        else:
+            output_parts.append(result.stderr or result.stdout or "未知错误")
+        elapsed = f"{result.execution_time_ms:.0f}ms" if result.execution_time_ms else ""
+        if elapsed:
+            output_parts.append(f"({elapsed})")
+
+        return {"name": "execute_shell", "content": "\n".join(output_parts)}
+
+    # ===== Tool: 文件操作 =====
+
+    @Tool(
+        "read_file",
+        description="读取工作区或白名单中的文件内容。用于查看代码文件、配置文件、数据文件等。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径（相对于工作区或绝对路径）",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_read_file(
+        self, path: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """读取文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "read_file", "content": "文件操作器未初始化"}
+        result = self._file_ops.read_file(path)
+        if result["success"]:
+            return {"name": "read_file", "content": result["content"]}
+        return {"name": "read_file", "content": f"读取失败: {result['error']}"}
+
+    @Tool(
+        "write_file",
+        description="写入内容到工作区文件。用于创建或修改代码文件、笔记等。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径（相对于工作区）",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="content",
+                param_type=ToolParamType.STRING,
+                description="要写入的文件内容",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_write_file(
+        self, path: str = "", content: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """写入文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "write_file", "content": "文件操作器未初始化"}
+        result = self._file_ops.write_file(path, content)
+        if result["success"]:
+            return {"name": "write_file", "content": f"已写入: {path}"}
+        return {"name": "write_file", "content": f"写入失败: {result['error']}"}
+
+    @Tool(
+        "list_files",
+        description="列出工作区目录中的文件。用于查看项目结构。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="目录路径（默认为工作区根目录）",
+                required=False,
+            ),
+        ],
+    )
+    async def handle_list_files(
+        self, path: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """列出文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "list_files", "content": "文件操作器未初始化"}
+        result = self._file_ops.list_files(path)
+        if result["success"]:
+            items = result["files"]
+            if not items:
+                return {"name": "list_files", "content": "目录为空"}
+            lines = [f"{'📁' if f['is_dir'] else '📄'} {f['name']}" for f in items]
+            return {"name": "list_files", "content": "\n".join(lines)}
+        return {"name": "list_files", "content": f"列出失败: {result['error']}"}
+
+    # ===== Action: 自动执行代码验证 =====
+
+    @Action(
+        "auto_verify_calc",
+        description="当用户消息中包含数学计算、数字验证需求时，自动执行代码验证",
+        activation_type=ActivationType.ALWAYS,
+        action_parameters={"code": "要执行的验证代码"},
+        action_require=[
+            "用户消息中包含数学计算或数字时使用",
+            "用户要求验证某个计算结果时使用",
+            "群友在争论数字对错时使用",
+            "用户问'对不对'、'是不是'、'等于多少'时使用",
+            "任何可以用代码验证的事实性问题",
+        ],
+        associated_types=["text"],
+    )
+    async def handle_auto_verify(
+        self, stream_id: str = "", code: str = "", **kwargs: Any
+    ) -> Tuple[bool, str]:
+        """自动验证动作。
+
+        当 LLM 判断用户消息需要代码验证时自动触发。
+        """
+        del kwargs
+
+        if not code.strip():
+            return False, "没有可执行的验证代码"
+
+        # 风险检查
+        risk = analyze_risk(code, code)
+        if risk.level == RiskLevel.CRITICAL:
+            return False, f"验证代码存在风险: {risk.reason}"
+
+        # 执行
+        result = execute_with_safety_check(code)
+
+        if result.success:
+            output = result.stdout.strip() or "(无输出)"
+            await self.ctx.send.text(
+                f"🔍 验证结果: {output}",
+                stream_id,
+            )
+            return True, f"验证完成: {output}"
+        else:
+            return False, f"验证失败: {result.error or result.stderr}"
 
     # ===== Command: /code =====
 
@@ -521,21 +1041,84 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     @EventHandler(
         "code_intent_detector",
-        description="检测代码相关意图的消息",
+        description="检测代码/计算相关意图，自动触发代码执行",
         event_type=EventType.ON_MESSAGE,
     )
     async def handle_code_intent(self, message: Any = None, **kwargs: Any) -> tuple:
-        """检测代码相关意图。
+        """检测代码相关意图并自动执行。
 
-        当消息中包含代码相关关键词时，可以提示用户使用 /code 命令。
-        当前版本仅做被动响应，不主动提示。
+        当消息中包含计算表达式、代码片段或验证需求时，
+        自动在沙箱中执行并返回结果。
         """
         del kwargs
 
         if not message or not self.config.plugin.enabled:
             return True, True, None, None, None
 
-        # 预留：未来可以在这里做主动意图识别
+        raw_text = ""
+        if isinstance(message, dict):
+            raw_text = message.get("plain_text", "") or message.get("raw_message", "")
+        else:
+            raw_text = str(message)
+
+        if not raw_text.strip():
+            return True, True, None, None, None
+
+        # 0. 紧急停止检测（最高优先级）
+        # 使用包含匹配而非精确匹配，覆盖更多自然语言表达
+        stop_keywords = [
+            "停止", "stop", "停下", "取消", "别做了", "别干了",
+            "快停", "紧急停止", "halt", "abort", "立刻停止",
+            "马上停", "停", "不要了", "算了", "别", "终止",
+            "停手", "住手", "打住", "刹车",
+        ]
+        for kw in stop_keywords:
+            if kw.lower() in raw_text.lower():
+                self._emergency_stop = True
+                self._pending_operations.clear()
+                await self.ctx.send.text(
+                    "🛑 已收到紧急停止指令。\n"
+                    "所有进行中的操作已终止。\n"
+                    "需要回滚到某个修改前吗？请告诉我回滚到哪个操作之前。",
+                    stream_id,
+                )
+                return True, True, "紧急停止已触发", None, None
+
+        # 1. 检测代码块
+        for pattern, intent_type in _CODE_PATTERNS:
+            match = pattern.search(raw_text)
+            if match:
+                if intent_type == "code_block":
+                    code = match.group(1).strip()
+                    if code and len(code) < 2000:
+                        result = execute_with_safety_check(code)
+                        output = result.stdout or result.stderr or ""
+                        await self.ctx.send.text(
+                            f"🔍 代码执行结果:\n```\n{output[:500]}\n```",
+                            message.get("stream_id", ""),
+                        )
+                        return True, True, "自动执行了代码块", None, None
+                break
+
+        # 2. 检测数学表达式（如 "1024 * 768"）
+        for pattern, intent_type in _CALC_PATTERNS:
+            match = pattern.search(raw_text)
+            if match:
+                if intent_type == "expression":
+                    expr = match.group(0).strip()
+                    # 安全检查：只允许纯数学表达式
+                    if re.match(r"^[\d\s\+\-\*\/\^\(\)\.\,\%\s]+$", expr):
+                        code = f"print({expr})"
+                        result = execute_with_safety_check(code)
+                        output = result.stdout.strip() if result.success else ""
+                        if output:
+                            await self.ctx.send.text(
+                                f"🧮 {expr} = {output}",
+                                message.get("stream_id", ""),
+                            )
+                            return True, True, f"自动计算: {expr} = {output}", None, None
+                break
+
         return True, True, None, None, None
 
     # ===== 生命周期 =====

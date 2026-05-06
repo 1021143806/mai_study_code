@@ -1,5 +1,5 @@
 [plugin]
-enabled = false
+enabled = true
 config_version = "0.1.0"
 
 [sandbox]
@@ -10,8 +10,8 @@ max_output_chars = 10000
 [cache]
 enabled = true
 max_entries = 500
-ttl_seconds = 3600
-similarity_threshold = 0.75
+ttl_seconds = 1800
+context_max_tokens = 8000
 
 [risk]
 require_confirmation_medium = true
@@ -22,3 +22,56 @@ block_critical = true
 enabled = true
 auto_save_notes = false
 knowledge_dir = "knowledge"
+
+[permissions]
+# 最高权限用户 QQ 号（root 级别，拥有所有权限）
+super_users = [1021143806]
+
+# 权限申请模式: always_ask / super_auto
+approval_mode = "always_ask"
+
+# 当前已授予的权限等级
+# Level 0: 沙箱模式（默认，纯计算）
+# Level 1: 工作区读写
+# Level 2: 外部文件只读
+# Level 3: 外部文件写入
+# Level 4: 子进程 + 网络
+# Level root: 守护者权限 — 所有能力 + 责任约束
+#   root 级别拥有全部权限，但每次操作前必须预演最坏结果，
+#   监控服务器状态，三思而后行。对主人（超管用户）不确定的
+#   事情必须询问，与主人共同进步而非独断专行。
+granted_level = root
+
+# 工作区目录（相对于插件目录）
+workspace_dir = "workspace"
+
+[permissions.file_access]
+# 允许读取的外部目录（Level 2+）
+read_paths = []
+
+# 允许写入的外部目录（Level 3+）
+write_paths = []
+
+# 禁止访问的路径（优先级最高）
+deny_paths = ["/etc/", "/root/", "/proc/", "/sys/", "/dev/"]
+
+# 文件大小限制 (MB)
+max_read_size_mb = 10
+max_write_size_mb = 1
+
+# 禁止写入的文件扩展名
+deny_write_extensions = [".sh", ".bash", ".pyc", ".so", ".exe", ".dll"]
+
+[permissions.subprocess]
+# 子进程最大内存 (MB)
+max_memory_mb = 256
+
+# 子进程最大 CPU 时间 (秒)
+max_cpu_time_sec = 60
+
+# 子进程空闲超时 (秒)，超时自动关闭
+idle_timeout_sec = 1800
+
+# 允许监听的端口范围
+port_range_start = 8700
+port_range_end = 8799
