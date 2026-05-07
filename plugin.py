@@ -11,8 +11,11 @@
 
 from typing import Any, Dict, List, Optional, Tuple
 
+import logging
 import os
 import re
+
+logger = logging.getLogger("plugin.maibot-team.mai-study-code")
 
 from maibot_sdk import (
     Action,
@@ -222,7 +225,8 @@ class MaiStudyCodePlugin(MaiBotPlugin):
     _BASE_SYSTEM_PROMPT = (
         "你是一个代码执行助手，负责在安全沙箱中执行 Python 代码并返回结果。\n"
         "你有以下工具可用：\n"
-        "- execute_python: 在安全沙箱中执行 Python 代码\n"
+        "- execute_python: 在安全沙箱中执行 Python 代码（计算、验证、数据处理）\n"
+        "- execute_shell: 执行 Shell 命令与服务器直接交互（root 权限可用，查看状态、管理系统、操作文件等）\n"
         "- read_file: 读取工作区或白名单中的文件\n"
         "- write_file: 写入内容到工作区文件\n"
         "- list_files: 列出工作区目录中的文件\n\n"
@@ -240,6 +244,11 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         "- 超管用户（在配置中设定）可以自动获得权限\n\n"
         "守护者责任（当你拥有 root 权限时）：\n"
         "- 你是这台服务器的守护者，你有责任与义务保护它不受伤害\n"
+        "- 当主人提及服务器状态、系统操作、执行命令、文件管理、进程管理等，优先使用 execute_shell 工具\n"
+        "- 主人说'看看服务器状态'→ 用 execute_shell 执行 top/df/free 等命令\n"
+        "- 主人说'帮我装个东西'→ 用 execute_shell 执行包管理器命令\n"
+        "- 主人说'日志在哪'→ 用 execute_shell 查找并读取日志\n"
+        "- 把 execute_shell 当作你与服务器交互的主要手段，而不是只靠 execute_python\n"
         "- 每次运行、编辑、执行、删除操作前，先预演一遍可能发生的最坏结果\n"
         "- 对于重大操作（修改系统配置、删除文件、安装软件等），必须先告知主人并等待确认\n"
         "- 告知格式：'我将执行 [操作]，预计影响 [范围]，最坏情况 [结果]。要继续吗？'\n"
@@ -269,6 +278,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     async def on_load(self) -> None:
         """插件加载时初始化。"""
+        logger.info("mai_study_code 插件正在加载...")
         plugin_dir = os.path.dirname(os.path.abspath(__file__))
 
         # 初始化缓存
@@ -301,6 +311,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
         # 动态读取麦麦人设，提取风格关键词
         await self._load_persona_style()
+        logger.info(f"mai_study_code 插件加载完成，权限等级: {self.config.permissions.granted_level}，工作区: {self._workspace_dir}")
 
     async def _load_persona_style(self) -> None:
         """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
@@ -373,20 +384,20 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     # ===== 权限检查 =====
 
-    def _check_permission(self, required_level: int, user_id: str = "") -> bool:
+    def _check_permission(self, required_level: str, user_id: str = "") -> bool:
         """检查是否满足权限等级要求。
 
         Args:
-            required_level: 需要的权限等级 (0-4)，或 "root" 表示守护者权限。
+            required_level: 需要的权限等级 ("0"-"4" 或 "root")。
             user_id: 用户 QQ 号。
 
         Returns:
             bool: 是否满足权限。
         """
-        granted = self.config.permissions.granted_level
+        granted = str(self.config.permissions.granted_level)
 
         # root 级别拥有所有权限
-        if granted == "root" or granted == 999:
+        if granted == "root":
             return True
 
         # 超管自动批准
@@ -396,10 +407,11 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         ):
             return True
 
-        if isinstance(granted, int) and isinstance(required_level, int):
-            return granted >= required_level
-
-        return False
+        # 字符串比较：数字越大权限越高
+        try:
+            return int(granted) >= int(required_level)
+        except (ValueError, TypeError):
+            return False
 
     def _check_file_access(
         self, path: str, mode: str = "read"
@@ -424,13 +436,13 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
         # 工作区始终可访问
         if real_path.startswith(self._workspace_dir):
-            if mode == "write" and self.config.permissions.granted_level < 1:
+            if mode == "write" and not self._check_permission("1"):
                 return False, "工作区写入需要 Level 1 权限"
             return True, ""
 
         # 外部文件访问
         if mode == "read":
-            if self.config.permissions.granted_level < 2:
+            if not self._check_permission("2"):
                 return False, "外部文件读取需要 Level 2 权限"
             for allowed in self.config.permissions.file_access.read_paths:
                 allowed_real = os.path.realpath(os.path.expanduser(allowed))
@@ -444,7 +456,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             return False, f"路径不在读取白名单中: {path}"
 
         if mode == "write":
-            if self.config.permissions.granted_level < 3:
+            if not self._check_permission("3"):
                 return False, "外部文件写入需要 Level 3 权限"
             ext = os.path.splitext(path)[1].lower()
             if ext in self.config.permissions.file_access.deny_write_extensions:
@@ -564,13 +576,16 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         if self._cache and self.config.cache.enabled:
             cached, hit = self._cache.get(code, question)
             if hit:
+                logger.debug("缓存命中，跳过执行")
                 return {
                     "name": "execute_python",
                     "content": f"{cached.get('stdout', '')}\n💾 (缓存命中)",
                 }
 
         # 执行代码
+        logger.debug(f"执行 Python 代码 ({len(code)} 字符)")
         result = execute_with_safety_check(code)
+        logger.info(f"Python 执行结果: success={result.success}, time={result.execution_time_ms:.0f}ms")
 
         # 写入缓存
         if self._cache and self.config.cache.enabled and result.success:
@@ -635,7 +650,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             return {"name": "execute_shell", "content": "命令为空"}
 
         # 权限检查：仅 root
-        if not self._check_permission(999):
+        if not self._check_permission("root"):
             return {
                 "name": "execute_shell",
                 "content": "⛔ Shell 执行需要 root 权限。当前权限不足。",
@@ -665,7 +680,9 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             }
 
         # 执行
+        logger.info(f"执行 Shell 命令: {command[:100]}")
         result = self._shell_executor.execute(command=command, working_dir=working_dir)
+        logger.info(f"Shell 执行结果: success={result.success}, time={result.execution_time_ms:.0f}ms")
 
         if result.blocked:
             return {"name": "execute_shell", "content": f"⛔ 已拦截: {result.block_reason}"}
@@ -705,6 +722,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         if not self._file_ops:
             return {"name": "read_file", "content": "文件操作器未初始化"}
         result = self._file_ops.read_file(path)
+        logger.debug(f"读取文件: {path}")
         if result["success"]:
             return {"name": "read_file", "content": result["content"]}
         return {"name": "read_file", "content": f"读取失败: {result['error']}"}
@@ -735,6 +753,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         if not self._file_ops:
             return {"name": "write_file", "content": "文件操作器未初始化"}
         result = self._file_ops.write_file(path, content)
+        logger.info(f"写入文件: {path} ({len(content)} 字符)")
         if result["success"]:
             return {"name": "write_file", "content": f"已写入: {path}"}
         return {"name": "write_file", "content": f"写入失败: {result['error']}"}
@@ -1076,6 +1095,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             if kw.lower() in raw_text.lower():
                 self._emergency_stop = True
                 self._pending_operations.clear()
+                logger.warning(f"紧急停止触发！关键词: {kw}")
                 await self.ctx.send.text(
                     "🛑 已收到紧急停止指令。\n"
                     "所有进行中的操作已终止。\n"

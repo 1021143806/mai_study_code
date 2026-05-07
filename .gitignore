@@ -1,0 +1,47 @@
+# Python 字节码
+__pycache__/
+*.py[cod]
+*.pyo
+*.pyd
+
+# 虚拟环境
+venv/
+.venv/
+env/
+.env
+
+# 环境配置
+config/env.toml
+.env
+*.env.local
+
+# 包管理
+*.egg-info/
+*.egg
+dist/
+build/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+
+# 日志
+*.log
+workspace/.shell_history.log
+
+# 备份与开发调试
+backup/
+dev/
+
+# 测试
+test/
+
+# 操作系统
+.DS_Store
+Thumbs.db
+
+#配置文件
+config.toml
