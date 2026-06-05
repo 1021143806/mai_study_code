@@ -42,6 +42,7 @@ plugins/mai_study_code/
 ├── _manifest.json          # 插件元数据 (Manifest v2)
 ├── plugin.py               # 插件入口 (MaiBotPlugin)
 ├── README.md               # 本文件
+├── config.toml             # 插件配置
 ├── sandbox/                # 安全沙箱模块
 │   ├── __init__.py
 │   ├── limits.py           # 白名单/黑名单/资源限制配置
@@ -54,9 +55,27 @@ plugins/mai_study_code/
 ├── risk/                   # 风险识别模块
 │   ├── __init__.py
 │   └── analyzer.py         # 四级风险评估
-└── learner/                # 学习模块
-    ├── __init__.py
-    └── knowledge.py        # 本地知识库管理
+├── learner/                # 学习模块
+│   ├── __init__.py
+│   └── knowledge.py        # 本地知识库管理
+├── web/                    # Web 服务模块（新增）
+│   ├── __init__.py
+│   ├── event_bus.py        # 事件总线（SSE 推送）
+│   ├── server.py           # HTTP 服务器（aiohttp）
+│   ├── routes.py           # 路由 + SSE + REST API
+│   ├── page_builder.py     # Bot 页面管理器
+│   └── monitor.html        # 监控面板模板
+├── tools/                  # 工具模块
+│   ├── __init__.py
+│   ├── file_ops.py         # 文件操作器
+│   └── shell_executor.py   # Shell 执行器
+├── debug_log/              # 调试日志模块（新增）
+│   ├── __init__.py
+│   └── logger.py           # 调试日志记录器
+└── workspace/              # 工作区（不纳入 git）
+    └── web/                # Bot 的 Web 空间
+        ├── theme.css       # 主题皮肤（Bot 可修改）
+        └── pages/          # Bot 自写页面目录
 ```
 
 ### 核心模块
@@ -112,6 +131,29 @@ plugins/mai_study_code/
 - **README**：项目理解
 - **笔记**：踩坑记录和心得
 
+#### 5. Web 服务 (web/)
+
+插件内嵌 HTTP 服务器，提供实时监控面板和 Bot 自写页面托管：
+
+- **监控面板**：`/` — 实时查看沙箱、缓存、知识库、上下文窗口状态
+- **SSE 实时推送**：`/api/stream` — 操作日志即时推送
+- **Bot 自写页面**：`/pages/<name>` — Bot 可以自己写 HTML 页面
+- **主题皮肤**：`/static/theme.css` — CSS 变量方案，Bot 可修改换肤
+- **REST API**：`/api/status`、`/api/knowledge`、`/api/cache`、`/api/sandbox`、`/api/debug_log`
+
+配置方式：在 `config.toml` 中设置 `[web]` 段，支持固定端口或自动发现。
+
+#### 6. 调试日志 (debug_log/)
+
+将关键日志写入文件持久化，并在 super_user 交互时推送摘要：
+
+- **日志文件**：写入 `workspace/debug.log`，支持自动轮转
+- **交互推送**：当 super_user 与 Bot 交互时，自动附带最近的调试日志摘要
+- **Web 查看**：`/api/debug_log?count=50` 查看最近日志
+- **日志类别**：启动 (startup)、操作 (operation)、缓存 (cache)、错误 (error)、紧急停止 (emergency)、权限 (permission)
+
+配置方式：在 `config.toml` 中设置 `[debug_log]` 段。
+
 ---
 
 ## 命令列表
@@ -144,6 +186,7 @@ plugins/mai_study_code/
 - **缓存**：最大条目、过期时间、上下文窗口大小
 - **风险控制**：各级风险是否需要确认
 - **学习**：知识库目录、自动保存
+- **调试日志**：启用/禁用、日志级别、推送设置、缓存状态冷却
 
 ---
 

@@ -1,0 +1,280 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>麦麦学代码 — 实时监控</title>
+    <link rel="stylesheet" href="/static/theme.css">
+    <style>
+        * { margin: 0; padding: 0; box-sizing: border-box; }
+        body {
+            font-family: var(--font-mono);
+            background: var(--bg-primary);
+            color: var(--text-primary);
+            padding: var(--spacing-md);
+            min-height: 100vh;
+        }
+        /* 导航栏 */
+        .nav-bar {
+            display: flex;
+            align-items: center;
+            gap: var(--spacing-md);
+            padding: var(--spacing-sm) var(--spacing-md);
+            background: var(--bg-card);
+            border-radius: var(--border-radius);
+            margin-bottom: var(--spacing-md);
+            box-shadow: var(--shadow-card);
+        }
+        .nav-brand { font-weight: bold; color: var(--color-info); text-decoration: none; font-size: 1rem; }
+        .nav-links { display: flex; gap: var(--spacing-sm); align-items: center; }
+        .nav-link { color: var(--text-secondary); text-decoration: none; padding: var(--spacing-xs) var(--spacing-sm); border-radius: 4px; font-size: 0.85rem; cursor: pointer; }
+        .nav-link:hover, .nav-link.active { color: var(--text-primary); background: var(--accent); }
+        .nav-dropdown { position: relative; }
+        .dropdown-menu {
+            display: none;
+            position: absolute;
+            top: 100%;
+            left: 0;
+            background: var(--bg-card);
+            border: 1px solid var(--border-color);
+            border-radius: var(--border-radius);
+            min-width: 160px;
+            z-index: 100;
+            box-shadow: var(--shadow-card);
+        }
+        .nav-dropdown:hover .dropdown-menu { display: block; }
+        .dropdown-menu a {
+            display: block;
+            padding: var(--spacing-xs) var(--spacing-sm);
+            color: var(--text-primary);
+            text-decoration: none;
+            font-size: 0.8rem;
+        }
+        .dropdown-menu a:hover { background: var(--accent); }
+        .nav-port { margin-left: auto; color: var(--text-muted); font-size: 0.8rem; }
+        /* 网格 */
+        .grid {
+            display: grid;
+            grid-template-columns: repeat(3, 1fr);
+            gap: var(--spacing-md);
+            margin-bottom: var(--spacing-md);
+        }
+        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
+        .card {
+            background: var(--bg-card);
+            border-radius: var(--border-radius);
+            padding: var(--spacing-md);
+            box-shadow: var(--shadow-card);
+        }
+        .card h3 {
+            font-size: 0.8rem;
+            color: var(--text-secondary);
+            margin-bottom: var(--spacing-sm);
+            text-transform: uppercase;
+            letter-spacing: 1px;
+        }
+        .stat-row {
+            display: flex;
+            justify-content: space-between;
+            padding: 0.2rem 0;
+            font-size: 0.78rem;
+        }
+        .stat-value { color: var(--color-success); }
+        .stat-value.warn { color: var(--color-warning); }
+        .stat-value.danger { color: var(--color-danger); }
+        /* 进度条 */
+        .progress-bar {
+            height: 6px;
+            background: #333;
+            border-radius: 3px;
+            margin-top: var(--spacing-sm);
+            overflow: hidden;
+        }
+        .progress-fill {
+            height: 100%;
+            background: var(--color-success);
+            border-radius: 3px;
+            transition: width 0.5s, background 0.5s;
+        }
+        /* 日志 */
+        .log-container {
+            background: var(--bg-card);
+            border-radius: var(--border-radius);
+            padding: var(--spacing-md);
+            max-height: 300px;
+            overflow-y: auto;
+            box-shadow: var(--shadow-card);
+        }
+        .log-entry {
+            font-size: 0.72rem;
+            padding: 0.15rem 0;
+            border-bottom: 1px solid var(--border-color);
+            font-family: var(--font-mono);
+        }
+        .log-time { color: var(--text-muted); }
+        .log-type { color: var(--color-info); }
+        .log-ok { color: var(--color-success); }
+        .log-err { color: var(--color-danger); }
+        .log-warn { color: var(--color-warning); }
+        /* 连接状态 */
+        .conn-status {
+            display: inline-block;
+            width: 8px;
+            height: 8px;
+            border-radius: 50%;
+            margin-right: 4px;
+        }
+        .conn-status.online { background: var(--color-success); }
+        .conn-status.offline { background: var(--color-danger); }
+    </style>
+</head>
+<body>
+    <!-- 导航栏 -->
+    <nav class="nav-bar">
+        <a href="/" class="nav-brand">🐚 麦麦学代码</a>
+        <div class="nav-links">
+            <a href="/" class="nav-link active">监控</a>
+            <div class="nav-dropdown">
+                <span class="nav-link">我的页面 ▾</span>
+                <div class="dropdown-menu" id="page-menu">
+                    <a href="#" style="color:var(--text-muted)">加载中...</a>
+                </div>
+            </div>
+        </div>
+        <span class="nav-port" id="port-display">
+            <span class="conn-status online" id="conn-dot"></span>
+            <span id="port-text"></span>
+        </span>
+    </nav>
+
+    <!-- 状态卡片 -->
+    <div class="grid">
+        <div class="card" id="sandbox-card">
+            <h3>📦 沙箱状态</h3>
+            <div id="sandbox-stats">连接中...</div>
+        </div>
+        <div class="card" id="cache-card">
+            <h3>💾 缓存状态</h3>
+            <div id="cache-stats">连接中...</div>
+        </div>
+        <div class="card" id="knowledge-card">
+            <h3>📝 知识库</h3>
+            <div id="knowledge-stats">连接中...</div>
+        </div>
+    </div>
+
+    <!-- 上下文窗口 -->
+    <div class="card" id="context-card" style="margin-bottom:var(--spacing-md)">
+        <h3>📊 上下文窗口</h3>
+        <div id="context-stats">连接中...</div>
+        <div class="progress-bar"><div class="progress-fill" id="context-bar" style="width:0%"></div></div>
+    </div>
+
+    <!-- 实时日志 -->
+    <div class="log-container">
+        <h3>📜 实时日志</h3>
+        <div id="log-entries"></div>
+    </div>
+
+    <script>
+        const logContainer = document.getElementById('log-entries');
+        const MAX_LOGS = 100;
+
+        function addLog(entry) {
+            const div = document.createElement('div');
+            div.className = 'log-entry';
+            const time = new Date(entry.timestamp * 1000).toLocaleTimeString();
+            const msg = entry.data.message || JSON.stringify(entry.data);
+            div.innerHTML = `<span class="log-time">[${time}]</span> ${escapeHtml(msg)}`;
+            logContainer.prepend(div);
+            while (logContainer.children.length > MAX_LOGS) {
+                logContainer.removeChild(logContainer.lastChild);
+            }
+        }
+
+        function escapeHtml(text) {
+            const d = document.createElement('div');
+            d.textContent = text;
+            return d.innerHTML;
+        }
+
+        function updateStats(stats) {
+            // 端口
+            if (stats.server) {
+                document.getElementById('port-text').textContent = '端口: ' + stats.server.port;
+            }
+            // 沙箱
+            const sb = stats.sandbox || {};
+            document.getElementById('sandbox-stats').innerHTML =
+                `<div class="stat-row"><span>执行次数</span><span class="stat-value">${sb.total || 0}</span></div>` +
+                `<div class="stat-row"><span>成功</span><span class="stat-value">${sb.success || 0}</span></div>` +
+                `<div class="stat-row"><span>失败</span><span class="stat-value ${(sb.failed||0) > 0 ? 'danger' : ''}">${sb.failed || 0}</span></div>` +
+                `<div class="stat-row"><span>平均耗时</span><span class="stat-value">${sb.avg_time_ms || 0}ms</span></div>`;
+            // 缓存
+            const cache = stats.cache || {};
+            const hitRate = cache.total_entries ? Math.round((cache.total_hits || 0) / Math.max(cache.total_entries, 1) * 100) : 0;
+            document.getElementById('cache-stats').innerHTML =
+                `<div class="stat-row"><span>命中率</span><span class="stat-value">${hitRate}%</span></div>` +
+                `<div class="stat-row"><span>活跃条目</span><span class="stat-value">${cache.active_entries || 0}</span></div>` +
+                `<div class="stat-row"><span>过期条目</span><span class="stat-value warn">${cache.expired_entries || 0}</span></div>` +
+                `<div class="stat-row"><span>容量</span><span class="stat-value">${cache.active_entries || 0}/${cache.max_entries || 500}</span></div>`;
+            // 知识库
+            const kb = stats.knowledge || {};
+            document.getElementById('knowledge-stats').innerHTML =
+                `<div class="stat-row"><span>总条目</span><span class="stat-value">${kb.total || 0}</span></div>` +
+                `<div class="stat-row"><span>分类数</span><span class="stat-value">${kb.categories || 0}</span></div>` +
+                `<div class="stat-row"><span>最近更新</span><span class="stat-value">${kb.last_updated || '-'}</span></div>`;
+            // 上下文
+            const ctx = stats.context || {};
+            const ctxPct = ctx.context_max_tokens ? Math.round((ctx.context_tokens_estimate || 0) / ctx.context_max_tokens * 100) : 0;
+            document.getElementById('context-stats').innerHTML =
+                `<div class="stat-row"><span>对话轮次</span><span class="stat-value">${ctx.context_turns || 0}</span></div>` +
+                `<div class="stat-row"><span>Token 估算</span><span class="stat-value">${ctx.context_tokens_estimate || 0}/${ctx.context_max_tokens || 8000}</span></div>` +
+                `<div class="stat-row"><span>当前话题</span><span class="stat-value">${ctx.current_topic || '无'}</span></div>`;
+            const bar = document.getElementById('context-bar');
+            bar.style.width = ctxPct + '%';
+            if (ctxPct > 80) bar.style.background = 'var(--color-danger)';
+            else if (ctxPct > 60) bar.style.background = 'var(--color-warning)';
+            else bar.style.background = 'var(--color-success)';
+        }
+
+        function loadPages() {
+            fetch('/api/pages')
+                .then(r => r.json())
+                .then(data => {
+                    const menu = document.getElementById('page-menu');
+                    if (!data.pages || data.pages.length === 0) {
+                        menu.innerHTML = '<a href="#" style="color:var(--text-muted)">暂无页面</a>';
+                        return;
+                    }
+                    menu.innerHTML = data.pages.map(p =>
+                        `<a href="/pages/${p.name}">${escapeHtml(p.title)}</a>`
+                    ).join('');
+                })
+                .catch(() => {
+                    document.getElementById('page-menu').innerHTML = '<a href="#" style="color:var(--text-muted)">加载失败</a>';
+                });
+        }
+
+        // SSE 连接
+        function connectSSE() {
+            const es = new EventSource('/api/stream');
+            es.addEventListener('stats', (e) => {
+                updateStats(JSON.parse(e.data));
+                document.getElementById('conn-dot').className = 'conn-status online';
+            });
+            es.addEventListener('log', (e) => {
+                addLog(JSON.parse(e.data));
+            });
+            es.onerror = () => {
+                document.getElementById('conn-dot').className = 'conn-status offline';
+            };
+            // 重连由 EventSource 自动处理
+        }
+
+        // 初始化
+        loadPages();
+        connectSSE();
+    </script>
+</body>
+</html>

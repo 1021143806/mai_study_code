@@ -14,6 +14,7 @@ from typing import Any, Dict, List, Optional, Tuple
 import logging
 import os
 import re
+import time
 
 logger = logging.getLogger("plugin.maibot-team.mai-study-code")
 
@@ -33,6 +34,7 @@ from .learner import KnowledgeBase, KnowledgeEntry
 from .risk import RiskLevel, analyze_risk
 from .sandbox import execute_with_safety_check
 from .tools import FileOperator, ShellExecutor
+from .web import EventBus, PageBuilder, PluginWebServer
 
 # ============================================================
 # 意图检测正则（用于 EventHandler 主动触发）
@@ -197,6 +199,59 @@ class PermissionsConfig(PluginConfigBase):
     subprocess: SubprocessConfig = Field(default_factory=SubprocessConfig)
 
 
+class WebConfig(PluginConfigBase):
+    """Web 服务配置。"""
+
+    __ui_label__ = "Web 服务"
+    __ui_icon__ = "globe"
+    __ui_order__ = 7
+
+    enabled: bool = Field(default=False, description="是否启用 Web 服务（监控面板 + Bot 页面）")
+    host: str = Field(default="127.0.0.1", description="监听地址")
+    port: int = Field(default=0, description="监听端口（0=自动发现）")
+    port_range_start: int = Field(default=8700, description="自动发现起始端口")
+    port_range_end: int = Field(default=8799, description="自动发现结束端口")
+    auto_refresh_sec: int = Field(default=30, description="页面自动刷新间隔（秒）")
+
+
+class DebugLogConfig(PluginConfigBase):
+    """调试日志配置。
+
+    启用后会将关键日志写入文件，并在 super_user 交互时推送摘要。
+    """
+
+    __ui_label__ = "调试日志"
+    __ui_icon__ = "bug"
+    __ui_order__ = 8
+
+    enabled: bool = Field(default=False, description="是否启用调试日志")
+    log_file: str = Field(
+        default="workspace/debug.log", description="日志文件路径（相对于插件目录）"
+    )
+    max_file_size_mb: int = Field(
+        default=5, description="日志文件最大大小 (MB)，超过后自动轮转"
+    )
+    backup_count: int = Field(default=2, description="保留的轮转文件数")
+    push_level: str = Field(
+        default="info", description="推送级别: info / warning / error"
+    )
+    push_max_lines: int = Field(
+        default=10, description="交互推送时附带的最大日志条数"
+    )
+    notify_startup: bool = Field(
+        default=True, description="是否推送启动日志"
+    )
+    notify_operations: bool = Field(
+        default=True, description="是否推送操作日志（工具调用）"
+    )
+    notify_cache_status: bool = Field(
+        default=True, description="是否推送缓存状态"
+    )
+    cache_status_cooldown: int = Field(
+        default=300, description="缓存状态推送冷却时间（秒）"
+    )
+
+
 class MaiStudyCodeConfig(PluginConfigBase):
     """麦麦学代码插件配置。"""
 
@@ -206,6 +261,8 @@ class MaiStudyCodeConfig(PluginConfigBase):
     risk: RiskConfig = Field(default_factory=RiskConfig)
     learner: LearnerConfig = Field(default_factory=LearnerConfig)
     permissions: PermissionsConfig = Field(default_factory=PermissionsConfig)
+    web: WebConfig = Field(default_factory=WebConfig)
+    debug_log: DebugLogConfig = Field(default_factory=DebugLogConfig)
 
 
 # ============================================================
@@ -275,6 +332,15 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         self._shell_executor: Optional[ShellExecutor] = None
         self._emergency_stop: bool = False  # 紧急停止标志
         self._pending_operations: List[Dict[str, Any]] = []  # 待确认的操作
+        # Web 服务
+        self._event_bus: Optional[EventBus] = None
+        self._web_server: Optional[PluginWebServer] = None
+        self._web_port: int = 0
+        self._sandbox_stats: Dict[str, Any] = {}
+        self._start_time: float = 0.0
+        # 调试日志
+        self._debug_logger: Optional[Any] = None
+        self._last_cache_status_time: float = 0.0
 
     async def on_load(self) -> None:
         """插件加载时初始化。"""
@@ -309,9 +375,52 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             workspace_dir=self._workspace_dir,
         )
 
+        # 初始化事件总线
+        self._event_bus = EventBus(max_events=200)
+
+        # 初始化 Web 服务
+        self._start_time = time.time()
+        if self.config.web.enabled:
+            from .web.server import resolve_port
+
+            port = resolve_port(
+                self.config.web.port,
+                self.config.web.port_range_start,
+                self.config.web.port_range_end,
+            )
+            self._web_server = PluginWebServer(self)
+            self._web_port = await self._web_server.start(self.config.web.host, port)
+            logger.info(f"Web 服务已启动: http://{self.config.web.host}:{self._web_port}")
+        else:
+            logger.info("Web 服务未启用")
+
+        # 确保 Bot 页面目录和默认页面存在
+        builder = PageBuilder(self._workspace_dir)
+        builder.ensure_default_pages()
+
         # 动态读取麦麦人设，提取风格关键词
         await self._load_persona_style()
-        logger.info(f"mai_study_code 插件加载完成，权限等级: {self.config.permissions.granted_level}，工作区: {self._workspace_dir}")
+
+        # 初始化调试日志
+        if self.config.debug_log.enabled:
+            from .debug_log import DebugLogger
+
+            log_path = os.path.join(plugin_dir, self.config.debug_log.log_file)
+            self._debug_logger = DebugLogger(
+                log_path=log_path,
+                max_file_size_mb=self.config.debug_log.max_file_size_mb,
+                backup_count=self.config.debug_log.backup_count,
+                push_level=self.config.debug_log.push_level,
+            )
+
+        load_msg = (
+            f"mai_study_code 插件加载完成，权限等级: {self.config.permissions.granted_level}，"
+            f"工作区: {self._workspace_dir}"
+            + (f"，Web 端口: {self._web_port}" if self._web_port else "")
+        )
+        logger.info(load_msg)
+        if self._debug_logger and self.config.debug_log.notify_startup:
+            self._debug_logger.startup(load_msg)
 
     async def _load_persona_style(self) -> None:
         """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
@@ -377,10 +486,18 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
     async def on_unload(self) -> None:
         """插件卸载时清理。"""
+        if self._debug_logger:
+            self._debug_logger.startup("插件正在卸载...")
+        # 停止 Web 服务
+        if self._web_server:
+            await self._web_server.stop()
+            self._web_server = None
         if self._cache:
             self._cache.clear()
         self._cache = None
         self._knowledge_base = None
+        self._event_bus = None
+        self._debug_logger = None
 
     # ===== 权限检查 =====
 
@@ -561,6 +678,12 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         # 风险检查
         risk = analyze_risk(code, code)
         if risk.level == RiskLevel.CRITICAL and self.config.risk.block_critical:
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.warning(
+                    "permission",
+                    f"execute_python 被阻止: {risk.reason}",
+                    {"code_preview": code[:80]},
+                )
             return {
                 "name": "execute_python",
                 "content": f"⚠️ 危险操作已阻止: {risk.reason}",
@@ -577,6 +700,15 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             cached, hit = self._cache.get(code, question)
             if hit:
                 logger.debug("缓存命中，跳过执行")
+                if self._event_bus:
+                    self._event_bus.publish("cache_hit", {
+                        "message": f"缓存命中: {code[:60].replace(chr(10), ' ')}...",
+                    })
+                if self._debug_logger and self.config.debug_log.notify_cache_status:
+                    self._debug_logger.log(
+                        "info", "cache",
+                        f"缓存命中: {code[:60].replace(chr(10), ' ')}...",
+                    )
                 return {
                     "name": "execute_python",
                     "content": f"{cached.get('stdout', '')}\n💾 (缓存命中)",
@@ -586,6 +718,18 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         logger.debug(f"执行 Python 代码 ({len(code)} 字符)")
         result = execute_with_safety_check(code)
         logger.info(f"Python 执行结果: success={result.success}, time={result.execution_time_ms:.0f}ms")
+
+        # 更新沙箱统计
+        self._update_sandbox_stats(result.success, result.execution_time_ms)
+
+        # 发布事件
+        if self._event_bus:
+            code_preview = code[:80].replace("\n", " ")
+            self._event_bus.publish("exec", {
+                "message": f"execute_python: {code_preview}... → {'成功' if result.success else '失败'} {result.execution_time_ms:.0f}ms",
+                "success": result.success,
+                "time_ms": result.execution_time_ms,
+            })
 
         # 写入缓存
         if self._cache and self.config.cache.enabled and result.success:
@@ -599,11 +743,35 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 assistant_msg=output[:500],
             )
 
+        # 缓存状态日志（带冷却）
+        if self._debug_logger and self.config.debug_log.notify_cache_status and self._cache:
+            now = time.time()
+            cooldown = self.config.debug_log.cache_status_cooldown
+            if now - self._last_cache_status_time >= cooldown:
+                self._last_cache_status_time = now
+                stats = self._cache.get_stats()
+                used = stats.get("total_entries", 0)
+                total = self.config.cache.max_entries
+                hit_rate = stats.get("hit_rate", 0)
+                self._debug_logger.cache_status(used, total, hit_rate)
+
         if result.success:
             output = result.stdout or "(无输出)"
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.operation(
+                    True, "execute_python",
+                    code[:80].replace("\n", " "),
+                    result.execution_time_ms,
+                )
             return {"name": "execute_python", "content": output}
         else:
             error_msg = result.error or result.stderr or "未知错误"
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.operation(
+                    False, "execute_python",
+                    f"{code[:60].replace(chr(10), ' ')}... → {error_msg[:60]}",
+                    result.execution_time_ms,
+                )
             return {"name": "execute_python", "content": f"❌ 执行失败: {error_msg}"}
 
     # ===== Tool: Shell 执行（仅 root） =====
@@ -684,7 +852,21 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         result = self._shell_executor.execute(command=command, working_dir=working_dir)
         logger.info(f"Shell 执行结果: success={result.success}, time={result.execution_time_ms:.0f}ms")
 
+        # 发布事件
+        if self._event_bus:
+            self._event_bus.publish("exec", {
+                "message": f"execute_shell: {command[:80]} → {'成功' if result.success else '失败'} {result.execution_time_ms:.0f}ms",
+                "success": result.success,
+                "time_ms": result.execution_time_ms,
+            })
+
         if result.blocked:
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.warning(
+                    "permission",
+                    f"execute_shell 被拦截: {result.block_reason}",
+                    {"command": command[:80]},
+                )
             return {"name": "execute_shell", "content": f"⛔ 已拦截: {result.block_reason}"}
 
         output_parts = []
@@ -697,6 +879,13 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         elapsed = f"{result.execution_time_ms:.0f}ms" if result.execution_time_ms else ""
         if elapsed:
             output_parts.append(f"({elapsed})")
+
+        if self._debug_logger and self.config.debug_log.notify_operations:
+            self._debug_logger.operation(
+                result.success, "execute_shell",
+                command[:80],
+                result.execution_time_ms,
+            )
 
         return {"name": "execute_shell", "content": "\n".join(output_parts)}
 
@@ -724,7 +913,11 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         result = self._file_ops.read_file(path)
         logger.debug(f"读取文件: {path}")
         if result["success"]:
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.operation(True, "read_file", path)
             return {"name": "read_file", "content": result["content"]}
+        if self._debug_logger and self.config.debug_log.notify_operations:
+            self._debug_logger.operation(False, "read_file", f"{path} → {result['error']}")
         return {"name": "read_file", "content": f"读取失败: {result['error']}"}
 
     @Tool(
@@ -755,7 +948,15 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         result = self._file_ops.write_file(path, content)
         logger.info(f"写入文件: {path} ({len(content)} 字符)")
         if result["success"]:
+            if self._debug_logger and self.config.debug_log.notify_operations:
+                self._debug_logger.operation(
+                    True, "write_file", f"{path} ({len(content)} 字符)"
+                )
             return {"name": "write_file", "content": f"已写入: {path}"}
+        if self._debug_logger and self.config.debug_log.notify_operations:
+            self._debug_logger.operation(
+                False, "write_file", f"{path} → {result['error']}"
+            )
         return {"name": "write_file", "content": f"写入失败: {result['error']}"}
 
     @Tool(
@@ -785,6 +986,147 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             lines = [f"{'📁' if f['is_dir'] else '📄'} {f['name']}" for f in items]
             return {"name": "list_files", "content": "\n".join(lines)}
         return {"name": "list_files", "content": f"列出失败: {result['error']}"}
+
+    # ===== Tool: 文件搜索与 Diff 修改 =====
+
+    @Tool(
+        "search_in_file",
+        description="在文件中搜索匹配行（grep 功能）。返回匹配行及上下文。用于在大型文件中定位特定内容。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="pattern",
+                param_type=ToolParamType.STRING,
+                description="搜索模式（支持正则表达式）",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_search_in_file(
+        self, path: str = "", pattern: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """搜索文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "search_in_file", "content": "文件操作器未初始化"}
+        result = self._file_ops.search_in_file(path, pattern)
+        if result["success"]:
+            matches = result["matches"]
+            if not matches:
+                return {"name": "search_in_file", "content": f"未找到匹配 '{pattern}' 的内容"}
+            lines = [f"找到 {len(matches)} 处匹配 (共 {result['total_lines']} 行):"]
+            for m in matches[:20]:
+                lines.append(f"\n行 {m['line_number']}: {m['line_content'][:100]}")
+                lines.append(m["context"])
+            return {"name": "search_in_file", "content": "\n".join(lines)}
+        return {"name": "search_in_file", "content": f"搜索失败: {result['error']}"}
+
+    @Tool(
+        "read_file_lines",
+        description="读取文件的指定行范围。用于查看大型文件的特定部分。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="start_line",
+                param_type=ToolParamType.INTEGER,
+                description="起始行号（1-based）",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="end_line",
+                param_type=ToolParamType.INTEGER,
+                description="结束行号（1-based，包含）",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_read_file_lines(
+        self, path: str = "", start_line: int = 1, end_line: int = 100, **kwargs: Any
+    ) -> Dict[str, Any]:
+        """读取指定行范围。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "read_file_lines", "content": "文件操作器未初始化"}
+        result = self._file_ops.read_file_lines(path, start_line, end_line)
+        if result["success"]:
+            return {"name": "read_file_lines", "content": result["content"]}
+        return {"name": "read_file_lines", "content": f"读取失败: {result['error']}"}
+
+    @Tool(
+        "apply_diff",
+        description="使用 diff 方式精确修改文件。在文件中查找 old_content 并替换为 new_content。要求 old_content 唯一存在，防止误改。修改前自动备份。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="old_content",
+                param_type=ToolParamType.STRING,
+                description="要替换的原文（必须精确匹配）",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="new_content",
+                param_type=ToolParamType.STRING,
+                description="替换后的新内容",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_apply_diff(
+        self, path: str = "", old_content: str = "", new_content: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """Diff 修改文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "apply_diff", "content": "文件操作器未初始化"}
+        result = self._file_ops.apply_diff(path, old_content, new_content)
+        if result["success"]:
+            return {"name": "apply_diff", "content": f"已修改: {path}"}
+        return {"name": "apply_diff", "content": f"修改失败: {result['error']}"}
+
+    @Tool(
+        "rollback_file",
+        description="回滚文件到指定历史备份。使用 list_backups 查看可用备份。",
+        parameters=[
+            ToolParameterInfo(
+                name="path",
+                param_type=ToolParamType.STRING,
+                description="文件路径",
+                required=True,
+            ),
+            ToolParameterInfo(
+                name="timestamp",
+                param_type=ToolParamType.STRING,
+                description="备份时间戳（如 20260507_143000）",
+                required=True,
+            ),
+        ],
+    )
+    async def handle_rollback_file(
+        self, path: str = "", timestamp: str = "", **kwargs: Any
+    ) -> Dict[str, Any]:
+        """回滚文件。"""
+        del kwargs
+        if not self._file_ops:
+            return {"name": "rollback_file", "content": "文件操作器未初始化"}
+        result = self._file_ops.rollback_file(path, timestamp)
+        if result["success"]:
+            return {"name": "rollback_file", "content": f"已回滚: {path} -> {timestamp}"}
+        return {"name": "rollback_file", "content": f"回滚失败: {result['error']}"}
 
     # ===== Action: 自动执行代码验证 =====
 
@@ -1096,6 +1438,10 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 self._emergency_stop = True
                 self._pending_operations.clear()
                 logger.warning(f"紧急停止触发！关键词: {kw}")
+                if self._debug_logger:
+                    self._debug_logger.warning(
+                        "emergency", f"紧急停止触发！关键词: {kw}"
+                    )
                 await self.ctx.send.text(
                     "🛑 已收到紧急停止指令。\n"
                     "所有进行中的操作已终止。\n"
@@ -1139,6 +1485,16 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                             return True, True, f"自动计算: {expr} = {output}", None, None
                 break
 
+        # 交互推送调试日志摘要给 super_user
+        if self._debug_logger and self.config.debug_log.enabled:
+            user_id = message.get("user_id", "") if isinstance(message, dict) else ""
+            if user_id in self.config.permissions.super_users:
+                summary = self._debug_logger.get_pending_summary(
+                    max_lines=self.config.debug_log.push_max_lines
+                )
+                if summary:
+                    await self.ctx.send.text(summary, stream_id)
+
         return True, True, None, None, None
 
     # ===== 生命周期 =====
@@ -1171,6 +1527,65 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                     default_ttl_seconds=new_ttl,
                     context_max_tokens=new_ctx,
                 )
+
+
+    # ===== 统计收集 =====
+
+    def _update_sandbox_stats(self, success: bool, execution_time_ms: float) -> None:
+        """更新沙箱执行统计。
+
+        Args:
+            success: 是否成功。
+            execution_time_ms: 执行耗时（毫秒）。
+        """
+        stats = self._sandbox_stats
+        stats["total"] = stats.get("total", 0) + 1
+        if success:
+            stats["success"] = stats.get("success", 0) + 1
+        else:
+            stats["failed"] = stats.get("failed", 0) + 1
+        # 移动平均耗时
+        old_avg = stats.get("avg_time_ms", 0)
+        old_count = stats.get("total", 1) - 1
+        stats["avg_time_ms"] = round(
+            (old_avg * old_count + execution_time_ms) / stats["total"], 1
+        )
+
+    def collect_stats(self) -> Dict[str, Any]:
+        """收集所有模块的统计信息，供监控面板使用。
+
+        Returns:
+            Dict[str, Any]: 统计信息。
+        """
+        cache_stats = self._cache.get_stats() if self._cache else {}
+        knowledge_stats = self._knowledge_base.get_stats() if self._knowledge_base else {}
+
+        context_stats = {
+            "context_turns": 0,
+            "context_tokens_estimate": 0,
+            "context_max_tokens": 8000,
+            "current_topic": "",
+        }
+        if self._cache:
+            context_stats = {
+                "context_turns": len(self._cache._context_turns) // 2,
+                "context_tokens_estimate": self._cache.estimate_tokens(
+                    self._cache._context_turns
+                ),
+                "context_max_tokens": self._cache._context_max_tokens,
+                "current_topic": self._cache._current_topic,
+            }
+
+        return {
+            "sandbox": self._sandbox_stats,
+            "cache": cache_stats,
+            "knowledge": knowledge_stats,
+            "context": context_stats,
+            "server": {
+                "port": self._web_port,
+                "uptime_seconds": round(time.time() - self._start_time, 1) if self._start_time else 0,
+            },
+        }
 
 
 def create_plugin() -> MaiStudyCodePlugin:
