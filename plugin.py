@@ -422,6 +422,62 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         if self._debug_logger and self.config.debug_log.notify_startup:
             self._debug_logger.startup(load_msg)
 
+        # 发送启动通知给所有超管用户
+        await self._notify_owner_startup()
+
+    async def _notify_owner_startup(self) -> None:
+        """插件启动后向所有超管用户发送启动通知。"""
+        super_users = self.config.permissions.super_users
+        if not super_users:
+            return
+
+        # 收集状态信息
+        web_info = (
+            f"http://127.0.0.1:{self._web_port}"
+            if self._web_port
+            else "未启用"
+        )
+        cache_count = 0
+        if self._cache:
+            stats = self._cache.get_stats()
+            cache_count = stats.get("active_entries", 0)
+        knowledge_count = 0
+        if self._knowledge_base:
+            k_stats = self._knowledge_base.get_stats()
+            knowledge_count = k_stats.get("total_entries", 0)
+
+        lines = [
+            "🐚 **麦麦学代码** 已重启就绪",
+            f"权限等级: `{self.config.permissions.granted_level}`",
+            f"Web 面板: {web_info}",
+            f"缓存: {cache_count} 活跃 / {self.config.cache.max_entries} 最大",
+            f"TTL: {self.config.cache.ttl_seconds // 60} 分钟",
+            f"知识库: {knowledge_count} 条笔记",
+        ]
+        if self.config.sandbox.max_memory_mb:
+            lines.append(
+                f"沙箱: {self.config.sandbox.max_memory_mb}MB / {self.config.sandbox.max_timeout_sec}s"
+            )
+        lines.extend(["", "守护者已就位，随时待命。有问题随时找我。"])
+
+        message = "\n".join(lines)
+
+        for user_id in super_users:
+            try:
+                result = await self.ctx.call_capability(
+                    "chat.open_session",
+                    platform="qq",
+                    chat_type="private",
+                    user_id=str(user_id),
+                )
+                if result.get("success") and result.get("stream"):
+                    stream_id = result.get("session_id") or result["stream"].get("session_id", "")
+                    if stream_id:
+                        await self.ctx.send.text(message, stream_id)
+                        logger.info(f"已向超管 {user_id} 发送启动通知")
+            except Exception:
+                logger.warning(f"向超管 {user_id} 发送启动通知失败，可能是尚未建立私聊会话")
+
     async def _load_persona_style(self) -> None:
         """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
 
