@@ -16,6 +16,8 @@ import os
 import re
 import time
 
+import aiohttp
+
 logger = logging.getLogger("plugin.maibot-team.mai-study-code")
 
 from maibot_sdk import (
@@ -426,7 +428,10 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         await self._notify_owner_startup()
 
     async def _notify_owner_startup(self) -> None:
-        """插件启动后向所有超管用户发送启动通知。"""
+        """插件启动后向所有超管用户发送启动通知。
+
+        直接调用 Napcat HTTP API 发送，避免 MaiBot Platform IO 路由问题。
+        """
         super_users = self.config.permissions.super_users
         if not super_users:
             return
@@ -460,23 +465,43 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             )
         lines.extend(["", "守护者已就位，随时待命。有问题随时找我。"])
 
-        message = "\n".join(lines)
+        message_text = "\n".join(lines)
+
+        # 发布到 WebUI 事件总线
+        if self._event_bus:
+            self._event_bus.publish("startup", {
+                "message": message_text,
+                "level": "info",
+            })
+
+        # Napcat HTTP API 配置（直接调用，不走 MaiBot Platform IO）
+        napcat_host = "172.19.0.21"
+        napcat_http_port = 3000
+        napcat_token = "shen"
 
         for user_id in super_users:
             try:
-                result = await self.ctx.call_capability(
-                    "chat.open_session",
-                    platform="qq",
-                    chat_type="private",
-                    user_id=str(user_id),
-                )
-                if result.get("success") and result.get("stream"):
-                    stream_id = result.get("session_id") or result["stream"].get("session_id", "")
-                    if stream_id:
-                        await self.ctx.send.text(message, stream_id)
-                        logger.info(f"已向超管 {user_id} 发送启动通知")
-            except Exception:
-                logger.warning(f"向超管 {user_id} 发送启动通知失败，可能是尚未建立私聊会话")
+                async with aiohttp.ClientSession(
+                    headers={"Authorization": f"Bearer {napcat_token}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as session:
+                    payload = {
+                        "user_id": int(user_id),
+                        "message": message_text,
+                    }
+                    async with session.post(
+                        f"http://{napcat_host}:{napcat_http_port}/send_private_msg",
+                        json=payload,
+                    ) as resp:
+                        result = await resp.json()
+                        if result.get("status") == "ok" and result.get("retcode") == 0:
+                            msg_id = result.get("data", {}).get("message_id", "?")
+                            logger.info(f"已通过 Napcat HTTP API 向超管 {user_id} 发送启动通知 (message_id={msg_id})")
+                        else:
+                            err_msg = result.get("message") or result.get("wording") or "未知错误"
+                            logger.warning(f"Napcat HTTP API 向超管 {user_id} 发送失败: {err_msg}")
+            except Exception as e:
+                logger.warning(f"通过 Napcat HTTP API 向超管 {user_id} 发送启动通知异常: {e}")
 
     async def _load_persona_style(self) -> None:
         """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
