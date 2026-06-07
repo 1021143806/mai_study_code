@@ -801,6 +801,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_execute_python(
         self, code: str = "", **kwargs: Any
@@ -945,6 +946,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=False,
             ),
         ],
+        visibility="visible",
     )
     async def handle_execute_shell(
         self, command: str = "", working_dir: str = "", **kwargs: Any
@@ -1049,6 +1051,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_read_file(
         self, path: str = "", **kwargs: Any
@@ -1084,6 +1087,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_write_file(
         self, path: str = "", content: str = "", **kwargs: Any
@@ -1117,6 +1121,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=False,
             ),
         ],
+        visibility="visible",
     )
     async def handle_list_files(
         self, path: str = "", **kwargs: Any
@@ -1153,6 +1158,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_search_in_file(
         self, path: str = "", pattern: str = "", **kwargs: Any
@@ -1196,6 +1202,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_read_file_lines(
         self, path: str = "", start_line: int = 1, end_line: int = 100, **kwargs: Any
@@ -1232,6 +1239,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_apply_diff(
         self, path: str = "", old_content: str = "", new_content: str = "", **kwargs: Any
@@ -1262,6 +1270,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 required=True,
             ),
         ],
+        visibility="visible",
     )
     async def handle_rollback_file(
         self, path: str = "", timestamp: str = "", **kwargs: Any

@@ -1,6 +1,6 @@
 {
   "manifest_version": 2,
-  "version": "0.1.0",
+  "version": "0.2.0",
   "name": "麦麦学代码 (Mai Study Code)",
   "description": "麦麦的代码学习伙伴，不是工具而是陪你一起成长的同路人。从零开始学代码，会自己写笔记、攒经验，不懂就问，有风险就提醒。让麦麦一步步成长为系统管理员。（root功能不支持windows）",
   "author": {
