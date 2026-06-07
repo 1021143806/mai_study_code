@@ -59,6 +59,7 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_get("/api/file", lambda r: _handle_file_read(r, plugin))
     app.router.add_post("/api/file/write", lambda r: _handle_file_write(r, plugin))
     app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
+    app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
 
     # 静态文件
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
@@ -382,6 +383,18 @@ async def _handle_execute(request: web.Request, plugin: "MaiStudyCodePlugin") ->
         "error": result.error or "",
         "execution_time_ms": result.execution_time_ms,
     })
+
+
+async def _handle_reload(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """通过插件 SDK 热重载插件（只重载本插件，不重启 Bot 进程）。"""
+    try:
+        # 使用 SDK 的 component.reload_plugin 能力进行热重载
+        result = await plugin.ctx.component.reload_plugin("mai_study_code")
+        logger.info("插件热重载请求已发送")
+        return web.json_response({"success": True, "message": "插件热重载请求已发送"})
+    except Exception as e:
+        logger.error(f"插件热重载失败: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
 async def _handle_static_theme(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
