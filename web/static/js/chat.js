@@ -115,7 +115,7 @@ export function connectSSE() {
       const event = JSON.parse(e.data);
       const msg = event.data?.message || '';
       if (msg) {
-        addAssistantLog('📢 ' + msg);
+        window.addAssistantLog('📢 ' + msg);
       }
     } catch (err) {}
   });
@@ -133,9 +133,14 @@ export function connectSSE() {
 // ================================================================
 
 export function addAssistantLog(msg, type) {
+  // 输出到右侧对话面板（仅显示错误、警告、保存成功）
   if (type === 'err' || type === 'warn' || (type === 'ok' && msg.includes('保存'))) {
     const msgEl = renderMsg('📎 ' + msg, false);
     document.getElementById('chat-messages').appendChild(msgEl);
     scrollChat();
+  }
+  // 输出到底部日志面板（所有消息）
+  if (window.logToPanel) {
+    window.logToPanel(msg, type || 'info');
   }
 }

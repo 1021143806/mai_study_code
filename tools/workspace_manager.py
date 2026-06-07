@@ -3,7 +3,7 @@
 支持的工作区类型：
 - local-sandbox: 本地沙箱（当前用户 a1）
 - local-root: 本地 root（通过 su/sudo）
-- ssh: 远程 SSH（通过 sshpass + ssh）
+- ssh: 远程 SSH（通过 asyncssh）
 
 每个工作区提供统一的文件操作和执行接口。
 """
@@ -15,6 +15,7 @@ import os
 import re
 import subprocess
 import time
+import asyncssh
 
 
 # ============================================================
@@ -115,6 +116,8 @@ class LocalSandboxWorkspace(Workspace):
             entries = sorted(os.listdir(target))
             tree = []
             ignored = {".git", "__pycache__", ".pytest_cache", "node_modules", ".npm_cache"}
+            skip_prefixes = {"/proc", "/sys", "/dev", "/run"}
+            max_entries = 100  # 最多显示 100 个条目
             for name in entries:
                 if name.startswith(".") and name not in (".gitignore", ".env"):
                     continue
@@ -127,16 +130,32 @@ class LocalSandboxWorkspace(Workspace):
                     rel = name
                 node = {"name": name, "path": rel, "is_dir": os.path.isdir(full)}
                 if node["is_dir"]:
-                    node["children"] = self._build_subtree(full)
+                    # 跳过虚拟文件系统
+                    abs_path = os.path.realpath(full)
+                    skip = False
+                    for p in skip_prefixes:
+                        if abs_path.startswith(p):
+                            skip = True
+                            break
+                    if not skip:
+                        node["children"] = self._build_subtree(full)
                 tree.append(node)
+                if len(tree) >= max_entries:
+                    break
             return {"success": True, "tree": tree, "root": path or "."}
         except Exception as e:
             return {"success": False, "error": str(e)}
 
     def _build_subtree(self, dir_path: str, depth: int = 0) -> List[Dict]:
-        if depth > 3:
+        if depth > 1:  # 只展开一级子目录，防止根目录爆炸
             return []
         entries = []
+        count = 0
+        # 跳过虚拟文件系统和系统目录
+        skip_dirs = {"/proc", "/sys", "/dev", "/run", "/proc/", "/sys/", "/dev/", "/run/"}
+        for skip in skip_dirs:
+            if dir_path.startswith(skip):
+                return []
         try:
             for name in sorted(os.listdir(dir_path)):
                 if name.startswith("."):
@@ -146,6 +165,9 @@ class LocalSandboxWorkspace(Workspace):
                 if node["is_dir"]:
                     node["children"] = self._build_subtree(full, depth + 1)
                 entries.append(node)
+                count += 1
+                if count >= 80:  # 每层最多 80 个条目
+                    break
         except PermissionError:
             pass
         return entries
@@ -277,8 +299,8 @@ class LocalRootWorkspace(LocalSandboxWorkspace):
 
 class SSHWorkspace(Workspace):
     """SSH 远程工作区。
-    
-    通过 sshpass + ssh 连接远程服务器，支持密码认证。
+
+    通过 asyncssh 连接远程服务器，支持密码和密钥认证。
     """
 
     def __init__(self, config: Dict[str, Any]) -> None:
@@ -288,50 +310,76 @@ class SSHWorkspace(Workspace):
         self.username: str = config.get("username", "root")
         self.password: str = config.get("password", "")
         self.root: str = config.get("path", "/root")
+        self._conn = None
 
-    def _ssh_opts(self) -> str:
-        return (
-            f"-o StrictHostKeyChecking=no "
-            f"-o UserKnownHostsFile=/dev/null "
-            f"-o ConnectTimeout=10 "
-            f"-p {self.port}"
-        )
+    async def _get_conn(self):
+        """获取或创建 SSH 连接。"""
+        if self._conn is None or self._conn.is_closed():
+            self._conn = await asyncssh.connect(
+                host=self.host,
+                port=self.port,
+                username=self.username,
+                password=self.password if self.password else None,
+                known_hosts=None,
+                connect_timeout=10,
+            )
+        return self._conn
+
+    async def _close(self):
+        """关闭 SSH 连接。"""
+        if self._conn and not self._conn.is_closed():
+            self._conn.close()
+            await self._conn.wait_closed()
+        self._conn = None
 
     def _ssh_exec(self, command: str, timeout: int = 30) -> Dict[str, Any]:
-        """通过 SSH 执行远程命令。"""
-        ssh_cmd = (
-            f'sshpass -e ssh {self._ssh_opts()} '
-            f'{shlex_quote(self.username)}@{shlex_quote(self.host)} '
-            f'{shlex_quote(command)}'
-        )
-        env = os.environ.copy()
-        env["SSHPASS"] = self.password
-
-        start = time.monotonic()
+        """通过 SSH 执行远程命令（同步包装器）。"""
+        import asyncio as _asyncio
         try:
-            proc = subprocess.Popen(
-                ssh_cmd, shell=True, stdout=subprocess.PIPE,
-                stderr=subprocess.PIPE, text=True, env=env,
-            )
-            stdout, stderr = proc.communicate(timeout=timeout)
-            elapsed = (time.monotonic() - start) * 1000
-            return {
-                "success": proc.returncode == 0,
-                "stdout": (stdout or "")[:10000],
-                "stderr": (stderr or "")[:10000],
-                "returncode": proc.returncode,
-                "execution_time_ms": round(elapsed, 1),
-            }
-        except subprocess.TimeoutExpired:
-            proc.kill()
-            proc.wait()
-            return {"success": False, "error": f"执行超时 ({timeout}s)"}
-        except Exception as e:
-            return {"success": False, "error": str(e)}
+            loop = _asyncio.get_running_loop()
+        except RuntimeError:
+            loop = None
+
+        async def _run():
+            try:
+                conn = await self._get_conn()
+                start = time.monotonic()
+                result = await _asyncio.wait_for(
+                    conn.run(command, timeout=timeout),
+                    timeout=timeout + 5,
+                )
+                elapsed = (time.monotonic() - start) * 1000
+                return {
+                    "success": result.returncode == 0,
+                    "stdout": (result.stdout or "")[:10000],
+                    "stderr": (result.stderr or "")[:10000],
+                    "returncode": result.returncode,
+                    "execution_time_ms": round(elapsed, 1),
+                }
+            except _asyncio.TimeoutError:
+                return {"success": False, "error": f"执行超时 ({timeout}s)"}
+            except asyncssh.Error as e:
+                return {"success": False, "error": str(e)}
+            except Exception as e:
+                return {"success": False, "error": str(e)}
+            finally:
+                await self._close()
+
+        if loop and loop.is_running():
+            # 在已有事件循环中运行
+            import concurrent.futures
+            with concurrent.futures.ThreadPoolExecutor() as pool:
+                future = _asyncio.run_coroutine_threadsafe(_run(), loop)
+                try:
+                    return future.result(timeout=timeout + 15)
+                except concurrent.futures.TimeoutError:
+                    return {"success": False, "error": "执行超时"}
+        else:
+            # 创建新事件循环
+            return _asyncio.run(_run())
 
     def list_files(self, path: str = "") -> Dict[str, Any]:
         target = path if path else self.root
-        # 用 find -printf 一次性获取名称和类型
         result = self._ssh_exec(
             f'find {shlex_quote(target)} -maxdepth 1 ! -name ".*" '
             f'-printf "%f|%y\\n" 2>/dev/null | sort',
@@ -349,24 +397,14 @@ class SSHWorkspace(Workspace):
                 tree.append({"name": name, "is_dir": ftype == "d"})
             return {"success": True, "tree": tree, "root": target}
         return {"success": True, "tree": [], "root": target}
-        if result.get("success") and result.get("stdout"):
-            try:
-                tree = json.loads(result["stdout"].strip())
-                return {"success": True, "tree": tree, "root": target}
-            except json.JSONDecodeError:
-                pass
-        # 降级
-        return {"success": True, "tree": [], "root": target}
 
     def read_file(self, path: str) -> Dict[str, Any]:
-        # 使用 cat 通过 SSH 读取
         result = self._ssh_exec(f'cat {shlex_quote(path)}', timeout=10)
         if result.get("success"):
             return {"success": True, "content": result.get("stdout", ""), "path": path}
         return {"success": False, "error": result.get("stderr") or result.get("error", "读取失败")}
 
     def write_file(self, path: str, content: str) -> Dict[str, Any]:
-        # 使用 echo + base64 通过 SSH 写入（避免转义问题）
         import base64
         encoded = base64.b64encode(content.encode("utf-8")).decode("ascii")
         cmd = f'echo {encoded} | base64 -d > {shlex_quote(path)}'

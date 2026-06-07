@@ -121,6 +121,33 @@ document.getElementById('chat-input-box').addEventListener('input', function() {
 });
 
 // ================================================================
+// 底部日志面板 - 垂直拖拽
+// ================================================================
+
+(function() {
+  const handle = document.querySelector('#log-panel .resize-handle');
+  if (!handle) return;
+  const panel = document.getElementById('log-panel');
+  let dragging = false, startY, startH;
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true; startY = e.clientY; startH = panel.offsetHeight;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'row-resize';
+    document.body.style.userSelect = 'none';
+  });
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const newH = Math.max(40, Math.min(500, startH + (startY - e.clientY)));
+    panel.style.height = newH + 'px';
+  });
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false; handle.classList.remove('dragging');
+    document.body.style.cursor = ''; document.body.style.userSelect = '';
+  });
+})();
+
+// ================================================================
 // 键盘快捷键
 // ================================================================
 
@@ -180,36 +207,17 @@ window.logToPanel = function(msg, type) {
   const color = type === 'err' ? 'var(--danger)' : type === 'warn' ? 'var(--warning)' : type === 'ok' ? 'var(--success)' : 'var(--text-secondary)';
   div.innerHTML = `<span style="color:var(--text-muted);margin-right:6px;font-size:10px">[${now}]</span><span style="color:${color}">${msg}</span>`;
   el.appendChild(div);
-  // 保留最多 200 条
-  while (el.children.length > 200) el.removeChild(el.firstChild);
+  while (el.children.length > 500) el.removeChild(el.firstChild);
   el.scrollTop = el.scrollHeight;
-};
-
-window.toggleLogPanel = function() {
-  const panel = document.getElementById('log-panel');
-  const toggle = document.getElementById('log-toggle');
-  if (!panel) return;
-  const isOpen = panel.style.height !== '0px' && panel.style.height !== '0' && panel.style.height !== '';
-  if (isOpen) {
-    panel.style.height = '0';
-    if (toggle) toggle.textContent = '📋 日志';
-  } else {
-    panel.style.height = '180px';
-    if (toggle) toggle.textContent = '📋 收起';
-  }
+  const count = document.getElementById('log-count');
+  if (count) count.textContent = el.children.length + ' 条';
 };
 
 window.clearLogPanel = function() {
   const el = document.getElementById('log-content');
-  if (el) el.innerHTML = '';
+  if (el) { el.innerHTML = ''; const c = document.getElementById('log-count'); if (c) c.textContent = '0 条'; }
 };
 
-// 重写 addAssistantLog 也输出到底部日志
-const _origLog = window.addAssistantLog;
-window.addAssistantLog = function(msg, type) {
-  if (_origLog) _origLog(msg, type);
-  window.logToPanel(msg, type || 'info');
-};
 
 // ================================================================
 // 初始化

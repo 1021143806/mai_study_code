@@ -74,6 +74,12 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_get("/api/plugin-config", lambda r: _handle_plugin_config_get(r, plugin))
     app.router.add_post("/api/plugin-config", lambda r: _handle_plugin_config_save(r, plugin))
 
+    # 权限等级 API
+    app.router.add_get("/api/level", lambda r: _handle_level(r, plugin))
+
+    # 聊天记录 API
+    app.router.add_get("/api/chat/history", lambda r: _handle_chat_history(r, plugin))
+
     # 静态文件 & CDN 代理
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
     # 通用静态文件服务（CSS, JS, 图片等）
@@ -443,7 +449,7 @@ async def _handle_reload(request: web.Request, plugin: "MaiStudyCodePlugin") -> 
 
 
 async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
-    """Claude Code 风格对话。
+    """Claude Code 风格对话（支持读写文件、执行代码）。
 
     Body (JSON):
         messages: 消息列表 [{role, content}, ...]
@@ -457,45 +463,380 @@ async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> we
     if not messages or not isinstance(messages, list):
         return web.json_response({"error": "缺少 messages 或格式错误"}, status=400)
 
-    # 系统提示
-    system_prompt = (
-        "你是一个智能编程助手，运行在沙箱环境中。"
-        "你可以帮助用户编写代码、调试、回答问题。"
-        "当用户要求执行代码时，直接输出代码，用户会自动复制或运行。"
-        "保持回答简洁、准确。"
-    )
+    # 接收前端传入的当前工作目录（相对路径，相对于工作区根）
+    cwd = str(body.get("cwd", "") or "").strip()
+    # 防止路径遍历
+    if ".." in cwd:
+        cwd = ""
+
+    # 根据权限等级筛选可用工具
+    granted_level = str(plugin.config.permissions.granted_level)
+    level_names = {
+        "0": "游客", "1": "访客", "2": "开发者",
+        "3": "管理员", "4": "超级用户", "root": "超级用户",
+    }
+
+    # 等级 → 可用工具映射
+    _all_tools = {
+        "read_file": {
+            "type": "function",
+            "function": {
+                "name": "read_file",
+                "description": "读取文件内容。如果路径是目录会自动列出目录内容。",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件或目录路径（相对于当前目录）"}}, "required": ["path"]}
+            }
+        },
+        "list_dir": {
+            "type": "function",
+            "function": {
+                "name": "list_dir",
+                "description": "列出指定目录下的文件和子目录",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目录路径（相对于当前目录，省略则列出当前目录）"}}, "required": []}
+            }
+        },
+        "write_file": {
+            "type": "function",
+            "function": {
+                "name": "write_file",
+                "description": "创建或覆盖工作区文件",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件路径"}, "content": {"type": "string", "description": "文件内容"}}, "required": ["path", "content"]}
+            }
+        },
+        "execute_code": {
+            "type": "function",
+            "function": {
+                "name": "execute_code",
+                "description": "在沙箱中执行 Python 代码并返回结果",
+                "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "Python 代码"}}, "required": ["code"]}
+            }
+        },
+        "create_dir": {
+            "type": "function",
+            "function": {
+                "name": "create_dir",
+                "description": "创建工作区内的目录",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目录路径（相对于当前目录）"}}, "required": ["path"]}
+            }
+        },
+        "change_dir": {
+            "type": "function",
+            "function": {
+                "name": "change_dir",
+                "description": "切换当前工作目录到指定的子目录。后续读写文件操作将基于新目录。",
+                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目标目录路径（相对于当前目录，使用 .. 返回上级）"}}, "required": ["path"]}
+            }
+        },
+    }
+    # 各等级可用的工具名
+    _level_tools = {
+        "0": [],
+        "1": ["read_file"],
+        "2": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
+        "3": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
+        "4": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
+        "root": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
+    }
+    allowed = _level_tools.get(granted_level, ["read_file"])
+    tools = [_all_tools[name] for name in allowed]
+
+    # 获取工作区根路径
+    ws_root = ""
+    ws_mgr = plugin._workspace_manager
+    if ws_mgr:
+        active_ws = ws_mgr.get_active_workspace()
+        if active_ws:
+            ws_root = active_ws.to_dict().get("path", "") or ""
 
     try:
-        # 组装对话文本
-        dialog = []
-        for m in messages:
-            role = m.get("role", "user")
-            content = m.get("content", "")
-            if role == "system":
-                dialog.append(f"系统: {content}")
-            elif role == "user":
-                dialog.append(f"用户: {content}")
-            elif role == "assistant":
-                dialog.append(f"助手: {content}")
-        dialog_text = "\n".join(dialog)
+        # 注入当前工作目录上下文
+        enhanced_messages = list(messages)
+        if ws_root:
+            context = f"当前工作目录: {ws_root}"
+            if cwd:
+                context = f"当前工作目录: {ws_root}/{cwd}\n你位于 {cwd} 子目录中。"
+                context += "\n读写文件时路径相对于当前目录。使用 change_dir 切换目录，使用 .. 返回上级。"
+            else:
+                context += "\n你位于工作区根目录。读写文件时使用相对于此目录的路径。"
+            enhanced_messages.insert(0, {
+                "role": "system",
+                "content": context,
+            })
 
-        result = await plugin.ctx.llm.generate(
-            f"{system_prompt}\n\n对话历史:\n{dialog_text}\n\n助手:",
-            model="replyer",
-        )
-        response_text = result.get("response", "") or result.get("content", "")
-        model = result.get("model", "")
+        # 工具执行循环：最多 3 轮，整体限时 60 秒
+        all_tool_results = []
+        final_response = ""
+        model = ""
+
+        for _round in range(3):
+            import asyncio as _wait
+            try:
+                result = await _wait.wait_for(
+                    plugin.ctx.llm.generate_with_tools(
+                        prompt=enhanced_messages,
+                        tools=tools,
+                        model="replyer",
+                    ),
+                    timeout=25,
+                )
+            except _wait.TimeoutError:
+                result = {"response": "（生成超时）", "tool_calls": [], "error": "timeout"}
+            response_text = result.get("response", "") or result.get("content", "")
+            model = result.get("model", model)
+            tool_calls = result.get("tool_calls", []) or []
+
+            if response_text and not tool_calls:
+                # 纯文本回复，没有需要执行的工具 → 这就是最终回复
+                final_response = response_text
+                break
+
+            # 有工具调用：暂存本轮文本（如果有），后续会被最终回复覆盖
+            if response_text:
+                final_response = response_text
+
+            if not tool_calls:
+                break
+
+            # 执行工具
+            ws = plugin._workspace_manager
+            ws_name = ws.get_active() if ws else ""
+            round_results = []
+
+            for tc in tool_calls:
+                func_name = tc.get("function", {}).get("name", "") if isinstance(tc, dict) else getattr(tc, "func_name", "")
+                args_raw = tc.get("function", {}).get("arguments", "{}") if isinstance(tc, dict) else "{}"
+                try:
+                    if isinstance(args_raw, str):
+                        import json as _json
+                        args = _json.loads(args_raw)
+                    else:
+                        args = args_raw
+                except Exception:
+                    args = {}
+
+                def _resolve(p: str) -> str:
+                    if not p or p.startswith("/") or "../" in p.replace("\\", "/"):
+                        return p
+                    return f"{cwd}/{p}" if cwd else p
+
+                result_entry = {"tool": func_name, "input": "", "output": "", "success": False}
+
+                try:
+                    if func_name == "read_file" or func_name == "list_dir":
+                        path = args.get("path", "") if func_name == "list_dir" else _resolve(args.get("path", ""))
+                        if not path:
+                            path = cwd or "."
+                        else:
+                            path = _resolve(path)
+                        result_entry["input"] = path
+                        if ws:
+                            fr = ws.read_file(path, workspace=ws_name)
+                            if not fr.get("success") and "不存在" in str(fr.get("error", "")):
+                                dir_list = ws.list_files(path, workspace=ws_name)
+                                if dir_list.get("success"):
+                                    tree = dir_list.get("tree", [])
+                                    lines = [f"{'📁' if n.get('is_dir') else '📄'} {n['name']}" for n in tree]
+                                    result_entry["output"] = "\n".join(lines) if lines else "(空目录)"
+                                    result_entry["success"] = True
+                                else:
+                                    result_entry["output"] = fr.get("error", "文件不存在")
+                            else:
+                                result_entry["output"] = fr.get("content", fr.get("error", "未知错误"))[:3000]
+                                result_entry["success"] = fr.get("success", False)
+                        else:
+                            result_entry["output"] = "工作区未初始化"
+
+                    elif func_name == "write_file":
+                        path = _resolve(args.get("path", ""))
+                        content = args.get("content", "")
+                        result_entry["input"] = f"{path} ({len(content)} chars)"
+                        if ws:
+                            fr = ws.write_file(path, content, workspace=ws_name)
+                            result_entry["output"] = "已保存" if fr.get("success") else fr.get("error", "失败")
+                            result_entry["success"] = fr.get("success", False)
+                        else:
+                            result_entry["output"] = "工作区未初始化"
+
+                    elif func_name == "change_dir":
+                        target = args.get("path", "")
+                        result_entry["input"] = target
+                        if target == "..":
+                            if cwd:
+                                parts = cwd.rstrip("/").split("/")
+                                parts.pop()
+                                cwd = "/".join(parts)
+                        elif target.startswith("/"):
+                            cwd = target.lstrip("/")
+                        else:
+                            cwd = f"{cwd}/{target}".lstrip("/") if cwd else target
+                        cwd_parts = []
+                        for part in cwd.split("/"):
+                            if part == ".." and cwd_parts:
+                                cwd_parts.pop()
+                            elif part != "..":
+                                cwd_parts.append(part)
+                        cwd = "/".join(cwd_parts)
+                        result_entry["output"] = f"已切换到 {cwd or '(根目录)'}"
+                        result_entry["success"] = True
+
+                    elif func_name == "create_dir":
+                        dir_path = _resolve(args.get("path", ""))
+                        result_entry["input"] = dir_path
+                        if ws:
+                            fr = ws.write_file(f"{dir_path}/.gitkeep", "", workspace=ws_name)
+                            result_entry["output"] = "目录已创建"
+                            result_entry["success"] = True
+                        else:
+                            result_entry["output"] = "工作区未初始化"
+
+                    elif func_name == "execute_code":
+                        code = args.get("code", "")
+                        result_entry["input"] = code[:100]
+                        from ..sandbox import execute_with_safety_check as _exec_check
+                        import asyncio as _asyncio
+                        try:
+                            future = _asyncio.get_running_loop().run_in_executor(None, lambda: _exec_check(code))
+                            er = await _asyncio.wait_for(future, timeout=15)
+                            result_entry["output"] = er.stdout if er.success else (er.stderr or er.error or "")
+                            result_entry["success"] = er.success
+                            # 更新统计
+                            try:
+                                plugin._update_sandbox_stats(er.success, er.execution_time_ms)
+                            except Exception:
+                                pass
+                        except _asyncio.TimeoutError:
+                            result_entry["output"] = "执行超时"
+                        except Exception as e:
+                            result_entry["output"] = f"执行异常: {e}"
+
+                    else:
+                        result_entry["output"] = f"未知工具: {func_name}"
+
+                except Exception as e:
+                    result_entry["output"] = str(e)
+
+                round_results.append(result_entry)
+                all_tool_results.append(result_entry)
+
+            # 将本次工具调用加入对话历史（assistant 消息 + tool 结果）
+            assistant_tc_msg = {
+                "role": "assistant",
+                "content": "",
+                "tool_calls": [],
+            }
+            for tc in tool_calls:
+                if isinstance(tc, dict):
+                    assistant_tc_msg["tool_calls"].append({
+                        "id": tc.get("id", ""),
+                        "type": "function",
+                        "function": {
+                            "name": tc.get("function", {}).get("name", ""),
+                            "arguments": tc.get("function", {}).get("arguments", "{}"),
+                        },
+                    })
+            enhanced_messages.append(assistant_tc_msg)
+
+            for i, tr in enumerate(round_results):
+                tc_id = ""
+                if i < len(tool_calls):
+                    tc_id = tool_calls[i].get("id", "") if isinstance(tool_calls[i], dict) else getattr(tool_calls[i], "call_id", "")
+                enhanced_messages.append({
+                    "role": "tool",
+                    "content": f"[{tr['tool']}] {tr['output'][:2000]}",
+                    "tool_call_id": tc_id,
+                })
+        else:
+            # 超过 5 轮，用最后一次的回复
+            if not final_response:
+                final_response = response_text or "(达到最大轮次)"
+
         error = result.get("error", "")
-        if not response_text and error:
-            return web.json_response({"success": False, "error": error})
+
+        # 流式传输支持
+        if body.get("stream"):
+            import json as _sjson
+            import asyncio as _asyncio
+            resp = web.StreamResponse(status=200, reason="OK", headers={
+                "Content-Type": "text/event-stream",
+                "Cache-Control": "no-cache",
+                "Connection": "keep-alive",
+                "X-Accel-Buffering": "no",
+            })
+            await resp.prepare(request)
+            # 发送工具结果事件
+            for tr in all_tool_results:
+                line = f"event: tool\ndata: {_sjson.dumps(tr, ensure_ascii=False)}\n\n"
+                await resp.write(line.encode("utf-8"))
+            # 流式发送文本回复（逐段）
+            if final_response:
+                text = final_response
+                chunks = text.split(" ")
+                buf = ""
+                for chunk in chunks:
+                    buf += chunk + " "
+                    if len(buf) >= 30:
+                        await resp.write(f"event: text\ndata: {buf}\n\n".encode("utf-8"))
+                        buf = ""
+                        await _asyncio.sleep(0.02)
+                if buf.strip():
+                    await resp.write(f"event: text\ndata: {buf}\n\n".encode("utf-8"))
+            # 发送完成事件
+            await resp.write(f"event: done\ndata: {_sjson.dumps({'cwd': cwd, 'level': granted_level, 'level_name': level_names.get(granted_level, granted_level)}, ensure_ascii=False)}\n\n".encode("utf-8"))
+            # 保存聊天记录
+            _save_chat_history(messages, cwd, plugin)
+            return resp
+
+        # 保存聊天记录
+        _save_chat_history(messages, cwd, plugin)
+
+        # 非流式：返回完整 JSON
         return web.json_response({
             "success": True,
-            "response": response_text,
+            "response": final_response or "",
             "model": model,
+            "tool_results": all_tool_results,
+            "level": granted_level,
+            "level_name": level_names.get(granted_level, granted_level),
+            "cwd": cwd,
+            "ws_root": ws_root,
         })
     except Exception as e:
         logger.error(f"对话生成失败: {e}")
         return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
+_CHAT_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "chat"))
+
+
+def _save_chat_history(messages, cwd, plugin):
+    """保存聊天记录到 data/chat/{workspace_name}.json"""
+    try:
+        import json as _json
+        ws_name = ""
+        if plugin._workspace_manager:
+            ws_name = plugin._workspace_manager.get_active() or "default"
+        safe_name = ws_name.replace("/", "_").replace(" ", "_").replace("\\", "_")
+        os.makedirs(_CHAT_DIR, exist_ok=True)
+        path = os.path.join(_CHAT_DIR, f"{safe_name}.json")
+        with open(path, "w", encoding="utf-8") as f:
+            _json.dump({"messages": messages, "cwd": cwd}, f, ensure_ascii=False, indent=2)
+    except Exception:
+        pass
+
+
+async def _handle_chat_history(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """获取指定工作区的聊天记录。"""
+    ws_name = request.query.get("workspace", "").strip()
+    if not ws_name and plugin._workspace_manager:
+        ws_name = plugin._workspace_manager.get_active() or ""
+    safe_name = ws_name.replace("/", "_").replace(" ", "_").replace("\\", "_")
+    path = os.path.join(_CHAT_DIR, f"{safe_name}.json")
+    try:
+        import json as _json
+        with open(path, "r", encoding="utf-8") as f:
+            data = _json.load(f)
+        return web.json_response(data)
+    except (FileNotFoundError, ValueError):
+        return web.json_response({"messages": [], "cwd": ""})
 
 
 def _get_ws(request: web.Request, plugin: "MaiStudyCodePlugin", required: bool = True):
@@ -611,6 +952,20 @@ async def _handle_plugin_config_save(request: web.Request, plugin: "MaiStudyCode
         return web.json_response({"error": f"保存失败: {e}"}, status=500)
 
 
+async def _handle_level(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """返回当前权限等级。"""
+    granted = str(plugin.config.permissions.granted_level)
+    level_names = {
+        "0": "游客", "1": "访客", "2": "开发者",
+        "3": "管理员", "4": "超级用户", "root": "超级用户",
+    }
+    return web.json_response({
+        "level": granted,
+        "name": level_names.get(granted, granted),
+        "super_users": list(plugin.config.permissions.super_users or []),
+    })
+
+
 async def _handle_static_theme(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
     """静态主题 CSS 文件。"""
     theme_path = os.path.join(plugin._workspace_dir, "web", "theme.css")
@@ -657,6 +1012,38 @@ def _load_monitor_html(plugin: "MaiStudyCodePlugin") -> str:
 
 _NPM_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".npm_cache")
 
+# 版本归一化：将所有 @codemirror/* 子包重定向到同一版本
+# 解决多版本共存导致的 instanceof 冲突
+_VERSION_MAP = {
+    "@codemirror/state": "6.5.2",
+    "@codemirror/view": "6.37.2",
+    "@codemirror/language": "6.11.1",
+    "@codemirror/commands": "6.8.1",
+    "@codemirror/search": "6.5.11",
+    "@codemirror/autocomplete": "6.18.6",
+    "@codemirror/lint": "6.8.5",
+    "@lezer/common": "1.2.3",
+    "@lezer/highlight": "1.2.1",
+    "@lezer/lr": "1.4.0",
+    "@marijn/find-cluster-break": "1.0.2",
+    "style-mod": "4.1.2",
+    "crelt": "1.0.6",
+    "w3c-keyname": "2.2.8",
+}
+
+
+def _normalize_npm_path(path: str) -> str:
+    """将 @codemirror/* 子包的版本号统一为同一版本。"""
+    import re as _re
+    for pkg, ver in _VERSION_MAP.items():
+        # 匹配 @scope/name@version 或 name@version
+        escaped = _re.escape(pkg)
+        pattern = rf'^{escaped}@\d+\.\d+\.\d+'
+        if _re.match(pattern, path):
+            rest = path[len(pkg) + len(_re.search(r'@\d+\.\d+\.\d+', path).group()):]
+            return f"{pkg}@{ver}{rest}"
+    return path
+
 _STATIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "static"))
 
 
@@ -684,12 +1071,17 @@ async def _handle_static_file(request: web.Request, plugin: "MaiStudyCodePlugin"
 
 
 async def _handle_npm_proxy(request: web.Request) -> web.Response:
-    """代理 jsDelivr /npm/ 路径（带本地磁盘缓存）。
+    """代理 jsDelivr /npm/ 路径（带本地磁盘缓存 + 版本归一化）。
 
-    首次请求从 CDN 拉取并缓存到本地，后续直接从缓存响应，
-    断网也能正常工作。
+    首次请求从 CDN 拉取并缓存到本地，后续直接从缓存响应。
+    版本归一化确保所有 @codemirror/* 子包使用同一版本，避免 instanceof 冲突。
     """
     path = request.match_info.get("path", "")
+    # 版本归一化
+    normalized_path = _normalize_npm_path(path)
+    if normalized_path != path:
+        logger.debug(f"版本归一化: {path} → {normalized_path}")
+        path = normalized_path
     # 本地缓存路径
     cache_path = os.path.join(_NPM_CACHE_DIR, path.replace("/", "_").replace("@", "_"))
     # 尝试从缓存读取

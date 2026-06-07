@@ -330,15 +330,8 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         self._knowledge_base: Optional[KnowledgeBase] = None
         self._style_hint: str = ""  # 从 bot_config 动态读取的风格提示
         self._workspace_dir: str = ""
-        self._file_ops: Optional[FileOperator] = None
-        self._shell_executor: Optional[ShellExecutor] = None
-        self._emergency_stop: bool = False  # 紧急停止标志
-        self._pending_operations: List[Dict[str, Any]] = []  # 待确认的操作
-        # Web 服务
-        self._event_bus: Optional[EventBus] = None
-        self._web_server: Optional[PluginWebServer] = None
-        self._web_port: int = 0
         self._sandbox_stats: Dict[str, Any] = {}
+        self._stats_path: str = ""
         self._start_time: float = 0.0
         # 工作区管理器
         self._workspace_manager: Optional[WorkspaceManager] = None
@@ -405,6 +398,17 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         # 初始化工作区管理器
         ws_config_path = os.path.join(plugin_dir, "data", "workspaces.json")
         self._workspace_manager = WorkspaceManager(ws_config_path, default_workspace_dir=self._workspace_dir)
+
+        # 加载持久化统计数据
+        self._stats_path = os.path.join(plugin_dir, "data", "stats.json")
+        try:
+            import json as _json
+            with open(self._stats_path, "r") as f:
+                loaded = _json.load(f)
+                if isinstance(loaded, dict):
+                    self._sandbox_stats = loaded
+        except (FileNotFoundError, ValueError):
+            self._sandbox_stats = {}
 
         # 动态读取麦麦人设，提取风格关键词
         await self._load_persona_style()
@@ -1619,7 +1623,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
     # ===== 统计收集 =====
 
     def _update_sandbox_stats(self, success: bool, execution_time_ms: float) -> None:
-        """更新沙箱执行统计。
+        """更新沙箱执行统计并持久化。
 
         Args:
             success: 是否成功。
@@ -1637,6 +1641,14 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         stats["avg_time_ms"] = round(
             (old_avg * old_count + execution_time_ms) / stats["total"], 1
         )
+        # 持久化到 data/stats.json
+        if self._stats_path:
+            try:
+                import json as _json
+                with open(self._stats_path, "w") as f:
+                    _json.dump(stats, f, ensure_ascii=False, indent=2)
+            except Exception:
+                pass
 
     def collect_stats(self) -> Dict[str, Any]:
         """收集所有模块的统计信息，供监控面板使用。
