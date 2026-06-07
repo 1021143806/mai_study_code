@@ -173,8 +173,7 @@ class SubprocessConfig(PluginConfigBase):
     idle_timeout_sec: int = Field(
         default=1800, description="子进程空闲超时 (秒)，超时自动关闭"
     )
-    port_range_start: int = Field(default=8700, description="允许监听的端口范围起始")
-    port_range_end: int = Field(default=8799, description="允许监听的端口范围结束")
+    allowed_port: int = Field(default=8700, description="允许监听的固定端口")
 
 
 class PermissionsConfig(PluginConfigBase):
@@ -210,9 +209,7 @@ class WebConfig(PluginConfigBase):
 
     enabled: bool = Field(default=False, description="是否启用 Web 服务（监控面板 + Bot 页面）")
     host: str = Field(default="127.0.0.1", description="监听地址")
-    port: int = Field(default=0, description="监听端口（0=自动发现）")
-    port_range_start: int = Field(default=8700, description="自动发现起始端口")
-    port_range_end: int = Field(default=8799, description="自动发现结束端口")
+    port: int = Field(default=8700, description="监听端口（固定端口）")
     auto_refresh_sec: int = Field(default=30, description="页面自动刷新间隔（秒）")
 
 
@@ -377,17 +374,22 @@ class MaiStudyCodePlugin(MaiBotPlugin):
 
         # 初始化 Web 服务
         self._start_time = time.time()
+        self._web_port = 0
         if self.config.web.enabled:
-            from .web.server import resolve_port
+            from .web.server import PluginWebServer, resolve_port
 
-            port = resolve_port(
-                self.config.web.port,
-                self.config.web.port_range_start,
-                self.config.web.port_range_end,
-            )
-            self._web_server = PluginWebServer(self)
-            self._web_port = await self._web_server.start(self.config.web.host, port)
-            logger.info(f"Web 服务已启动: http://{self.config.web.host}:{self._web_port}")
+            try:
+                port = resolve_port(self.config.web.port)
+                self._web_server = PluginWebServer(self)
+                self._web_port = await self._web_server.start(self.config.web.host, port)
+                logger.info(f"Web 服务已启动: http://{self.config.web.host}:{self._web_port}")
+            except RuntimeError as e:
+                error_msg = f"⚠️ Web 服务启动失败: {e}"
+                logger.error(error_msg)
+                # 向超管发送端口被占用的错误通知
+                await self._notify_port_error(str(e))
+                self._web_server = None
+                self._web_port = 0
         else:
             logger.info("Web 服务未启用")
 
@@ -512,6 +514,60 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                             logger.warning(f"Napcat HTTP API 向超管 {user_id} 发送失败: {err_msg}")
             except Exception as e:
                 logger.warning(f"通过 Napcat HTTP API 向超管 {user_id} 发送启动通知异常: {e}")
+
+    async def _notify_port_error(self, error_detail: str) -> None:
+        """Web 服务因端口被占用启动失败时，向所有超管用户发送错误通知。
+
+        Args:
+            error_detail: 错误详细信息。
+        """
+        super_users = self.config.permissions.super_users
+        if not super_users:
+            return
+
+        message_text = (
+            "❌ **麦麦学代码 Web 服务启动失败**\n\n"
+            f"端口 `{self.config.web.port}` 被占用，自动清理失败。\n"
+            f"错误详情: {error_detail}\n\n"
+            "请检查端口占用情况：\n"
+            f"`lsof -i :{self.config.web.port}`\n"
+            "或尝试手动释放端口后重启插件。"
+        )
+
+        # 发布到 WebUI 事件总线
+        if self._event_bus:
+            self._event_bus.publish("error", {
+                "message": message_text,
+                "level": "error",
+            })
+
+        napcat_host = "172.19.0.21"
+        napcat_http_port = 3000
+        napcat_token = "shen"
+
+        for user_id in super_users:
+            try:
+                async with aiohttp.ClientSession(
+                    headers={"Authorization": f"Bearer {napcat_token}"},
+                    timeout=aiohttp.ClientTimeout(total=10),
+                ) as session:
+                    payload = {
+                        "user_id": int(user_id),
+                        "message": message_text,
+                    }
+                    async with session.post(
+                        f"http://{napcat_host}:{napcat_http_port}/send_private_msg",
+                        json=payload,
+                    ) as resp:
+                        result = await resp.json()
+                        if result.get("status") == "ok" and result.get("retcode") == 0:
+                            msg_id = result.get("data", {}).get("message_id", "?")
+                            logger.info(f"已向超管 {user_id} 发送端口错误通知 (message_id={msg_id})")
+                        else:
+                            err_msg = result.get("message") or result.get("wording") or "未知错误"
+                            logger.warning(f"端口错误通知发送失败: {err_msg}")
+            except Exception as e:
+                logger.warning(f"向超管 {user_id} 发送端口错误通知异常: {e}")
 
     async def _load_persona_style(self) -> None:
         """从 bot_config.toml 读取麦麦人设，提取轻量风格提示。
