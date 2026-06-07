@@ -1,0 +1,14 @@
+{
+  "active": "沙箱工作区",
+  "workspaces": [
+    {
+      "name": "沙箱工作区",
+      "type": "local-sandbox",
+      "path": "/home/a1"
+    },
+    {
+      "name": "本地 Root",
+      "type": "local-root"
+    }
+  ]
+}

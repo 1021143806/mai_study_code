@@ -62,8 +62,21 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
     app.router.add_post("/api/chat", lambda r: _handle_chat(r, plugin))
 
+    # 工作区 API
+    app.router.add_get("/api/workspaces", lambda r: _handle_workspaces_list(r, plugin))
+    app.router.add_post("/api/workspaces", lambda r: _handle_workspaces_save(r, plugin))
+    app.router.add_delete("/api/workspaces/{name}", lambda r: _handle_workspaces_delete(r, plugin))
+    app.router.add_post("/api/workspaces/{name}/activate", lambda r: _handle_workspaces_activate(r, plugin))
+    app.router.add_post("/api/workspaces/{name}/test", lambda r: _handle_workspaces_test(r, plugin))
+
+    # 插件配置 API
+    app.router.add_get("/api/plugin-config", lambda r: _handle_plugin_config_get(r, plugin))
+    app.router.add_post("/api/plugin-config", lambda r: _handle_plugin_config_save(r, plugin))
+
     # 静态文件 & CDN 代理
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
+    # 通用静态文件服务（CSS, JS, 图片等）
+    app.router.add_get("/static/{path:.+}", lambda r: _handle_static_file(r, plugin))
     # 代理 jsDelivr /npm/ 路径，用于本地化 CodeMirror ESM 依赖
     app.router.add_get("/npm/{path:.+}", lambda r: _handle_npm_proxy(r))
 
@@ -259,21 +272,31 @@ async def _handle_files(request: web.Request, plugin: "MaiStudyCodePlugin") -> w
 
     Query 参数:
         dir: 相对于工作区的子目录（可选，默认根目录）。
+        workspace: 工作区名称（可选，默认当前活动工作区）。
     """
     sub_dir = request.query.get("dir", "").strip()
-    # 安全检查：防止路径遍历
+    ws_name = request.query.get("workspace", "").strip()
+
+    # 如果指定了工作区，使用工作区管理器
+    if ws_name or (plugin._workspace_manager and plugin._workspace_manager.get_active()):
+        mgr = plugin._workspace_manager
+        if mgr is None:
+            return web.json_response({"error": "工作区管理器未初始化"}, status=500)
+        result = mgr.list_files(path=sub_dir, workspace=ws_name)
+        if result.get("success"):
+            return web.json_response(result)
+        return web.json_response({"error": result.get("error", "未知错误")}, status=500)
+
+    # 旧逻辑（向后兼容）
     if ".." in sub_dir:
         return web.json_response({"error": "禁止访问上级目录"}, status=403)
-
     base_path = plugin._workspace_dir
     if sub_dir:
         base_path = os.path.join(base_path, sub_dir)
         if not os.path.realpath(base_path).startswith(os.path.realpath(plugin._workspace_dir)):
             return web.json_response({"error": "路径不在工作区内"}, status=403)
-
     if not os.path.isdir(base_path):
         return web.json_response({"error": "目录不存在"}, status=404)
-
     tree = _build_file_tree(base_path, plugin._workspace_dir)
     return web.json_response({"tree": tree, "root": sub_dir or "."})
 
@@ -282,22 +305,31 @@ async def _handle_file_read(request: web.Request, plugin: "MaiStudyCodePlugin") 
     """读取工作区文件内容。
 
     Query 参数:
-        path: 相对于工作区的文件路径。
+        path: 文件路径。
+        workspace: 工作区名称（可选）。
     """
     file_path = request.query.get("path", "").strip()
     if not file_path:
         return web.json_response({"error": "缺少 path 参数"}, status=400)
+
+    ws_name = request.query.get("workspace", "").strip()
+    if ws_name or (plugin._workspace_manager and plugin._workspace_manager.get_active()):
+        mgr = plugin._workspace_manager
+        if mgr is None:
+            return web.json_response({"error": "工作区管理器未初始化"}, status=500)
+        result = mgr.read_file(path=file_path, workspace=ws_name)
+        if result.get("success"):
+            return web.json_response({"path": file_path, "content": result.get("content", "")})
+        return web.json_response({"error": result.get("error", "读取失败")}, status=500)
+
     if ".." in file_path:
         return web.json_response({"error": "禁止访问上级目录"}, status=403)
-
     full_path = os.path.join(plugin._workspace_dir, file_path)
     real_path = os.path.realpath(full_path)
     if not real_path.startswith(os.path.realpath(plugin._workspace_dir)):
         return web.json_response({"error": "路径不在工作区内"}, status=403)
-
     if not os.path.isfile(real_path):
         return web.json_response({"error": "文件不存在"}, status=404)
-
     try:
         with open(real_path, "r", encoding="utf-8") as f:
             content = f.read()
@@ -310,26 +342,35 @@ async def _handle_file_write(request: web.Request, plugin: "MaiStudyCodePlugin")
     """写入工作区文件。
 
     Body (JSON):
-        path: 相对于工作区的文件路径。
+        path: 文件路径。
         content: 文件内容。
+        workspace: 工作区名称（可选）。
     """
     try:
         body = await request.json()
     except Exception:
         return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
-
     file_path = str(body.get("path", "") or "").strip()
     content = str(body.get("content", "") or "")
     if not file_path:
         return web.json_response({"error": "缺少 path 参数"}, status=400)
+
+    ws_name = str(body.get("workspace", "") or "").strip()
+    if ws_name or (plugin._workspace_manager and plugin._workspace_manager.get_active()):
+        mgr = plugin._workspace_manager
+        if mgr is None:
+            return web.json_response({"error": "工作区管理器未初始化"}, status=500)
+        result = mgr.write_file(path=file_path, content=content, workspace=ws_name)
+        if result.get("success"):
+            return web.json_response({"success": True, "path": file_path})
+        return web.json_response({"error": result.get("error", "写入失败")}, status=500)
+
     if ".." in file_path:
         return web.json_response({"error": "禁止访问上级目录"}, status=403)
-
     full_path = os.path.join(plugin._workspace_dir, file_path)
     real_path = os.path.realpath(full_path)
     if not real_path.startswith(os.path.realpath(plugin._workspace_dir)):
         return web.json_response({"error": "路径不在工作区内"}, status=403)
-
     try:
         os.makedirs(os.path.dirname(real_path), exist_ok=True)
         with open(real_path, "w", encoding="utf-8") as f:
@@ -456,6 +497,107 @@ async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> we
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+def _get_ws(request: web.Request, plugin: "MaiStudyCodePlugin", required: bool = True):
+    """从请求中获取工作区管理器及当前工作区名。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        if required:
+            raise web.HTTPInternalServerError(text="工作区管理器未初始化")
+        return None, ""
+    ws_name = request.query.get("workspace", "") or mgr.get_active()
+    return mgr, ws_name
+
+
+async def _handle_workspaces_list(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """列出所有工作区。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"workspaces": [], "active": ""})
+    return web.json_response({
+        "workspaces": mgr.list_workspaces(),
+        "active": mgr.get_active(),
+    })
+
+
+async def _handle_workspaces_save(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """添加或更新工作区。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"success": False, "error": "工作区管理器未初始化"}, status=500)
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "error": "请求体不是有效 JSON"}, status=400)
+    ok, msg = mgr.add_or_update(body)
+    return web.json_response({"success": ok, "message": msg})
+
+
+async def _handle_workspaces_delete(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """删除工作区。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"success": False, "error": "工作区管理器未初始化"}, status=500)
+    name = request.match_info.get("name", "")
+    ok, msg = mgr.remove(name)
+    return web.json_response({"success": ok, "message": msg})
+
+
+async def _handle_workspaces_activate(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """切换活动工作区。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"success": False, "error": "工作区管理器未初始化"}, status=500)
+    name = request.match_info.get("name", "")
+    ok, msg = mgr.set_active(name)
+    return web.json_response({"success": ok, "message": msg})
+
+
+async def _handle_workspaces_test(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """测试工作区连接。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"success": False, "error": "工作区管理器未初始化"}, status=500)
+    name = request.match_info.get("name", "")
+    result = mgr.test_connection(name)
+    return web.json_response(result)
+
+
+_PLUGIN_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), ".."))
+_CONFIG_PATH = os.path.join(_PLUGIN_DIR, "config.toml")
+
+
+async def _handle_plugin_config_get(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """获取插件配置文件内容。"""
+    if not os.path.isfile(_CONFIG_PATH):
+        return web.json_response({"error": "配置文件不存在"}, status=404)
+    try:
+        with open(_CONFIG_PATH, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.json_response({"content": content, "path": _CONFIG_PATH})
+    except Exception as e:
+        return web.json_response({"error": f"读取失败: {e}"}, status=500)
+
+
+async def _handle_plugin_config_save(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """保存插件配置文件。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+    content = str(body.get("content", "") or "")
+    try:
+        with open(_CONFIG_PATH, "w", encoding="utf-8") as f:
+            f.write(content)
+        # 触发热重载
+        try:
+            await plugin.ctx.config.reload("self", plugin_id=plugin.ctx.plugin_id)
+        except Exception:
+            pass
+        return web.json_response({"success": True, "message": "配置已保存"})
+    except Exception as e:
+        return web.json_response({"error": f"保存失败: {e}"}, status=500)
+
+
 async def _handle_static_theme(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
     """静态主题 CSS 文件。"""
     theme_path = os.path.join(plugin._workspace_dir, "web", "theme.css")
@@ -501,6 +643,31 @@ def _load_monitor_html(plugin: "MaiStudyCodePlugin") -> str:
 
 
 _NPM_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".npm_cache")
+
+_STATIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "static"))
+
+
+async def _handle_static_file(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """通用静态文件服务。"""
+    path = request.match_info.get("path", "")
+    full_path = os.path.normpath(os.path.join(_STATIC_DIR, path))
+    if not full_path.startswith(_STATIC_DIR):
+        raise web.HTTPNotFound()
+    if not os.path.isfile(full_path):
+        raise web.HTTPNotFound()
+    ext_map = {
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".mjs": "application/javascript",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+    }
+    _, ext = os.path.splitext(path)
+    ct = ext_map.get(ext.lower(), "application/octet-stream")
+    with open(full_path, "rb") as f:
+        body = f.read()
+    return web.Response(body=body, content_type=ct)
 
 
 async def _handle_npm_proxy(request: web.Request) -> web.Response:

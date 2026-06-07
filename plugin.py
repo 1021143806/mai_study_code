@@ -35,7 +35,7 @@ from .cache import CodeCache
 from .learner import KnowledgeBase, KnowledgeEntry
 from .risk import RiskLevel, analyze_risk
 from .sandbox import execute_with_safety_check
-from .tools import FileOperator, ShellExecutor
+from .tools import FileOperator, ShellExecutor, WorkspaceManager
 from .web import EventBus, PageBuilder, PluginWebServer
 
 # ============================================================
@@ -340,6 +340,8 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         self._web_port: int = 0
         self._sandbox_stats: Dict[str, Any] = {}
         self._start_time: float = 0.0
+        # 工作区管理器
+        self._workspace_manager: Optional[WorkspaceManager] = None
         # 调试日志
         self._debug_logger: Optional[Any] = None
         self._last_cache_status_time: float = 0.0
@@ -399,6 +401,10 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         # 确保 Bot 页面目录和默认页面存在
         builder = PageBuilder(self._workspace_dir)
         builder.ensure_default_pages()
+
+        # 初始化工作区管理器
+        ws_config_path = os.path.join(plugin_dir, "web", "workspaces.json")
+        self._workspace_manager = WorkspaceManager(ws_config_path)
 
         # 动态读取麦麦人设，提取风格关键词
         await self._load_persona_style()

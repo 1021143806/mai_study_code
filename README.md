@@ -58,17 +58,31 @@ plugins/mai_study_code/
 ├── learner/                # 学习模块
 │   ├── __init__.py
 │   └── knowledge.py        # 本地知识库管理
-├── web/                    # Web 服务模块（新增）
+├── web/                    # Web 服务模块
 │   ├── __init__.py
 │   ├── event_bus.py        # 事件总线（SSE 推送）
 │   ├── server.py           # HTTP 服务器（aiohttp）
 │   ├── routes.py           # 路由 + SSE + REST API
+│   │   └── handlers/       # API 处理函数（routes.py 内联）
 │   ├── page_builder.py     # Bot 页面管理器
-│   └── monitor.html        # 监控面板模板
+│   ├── monitor.html        # 监控面板入口（引用外部 CSS/JS）
+│   ├── static/             # 前端静态文件
+│   │   ├── css/
+│   │   │   └── monitor.css # Frosted Glass 风格样式
+│   │   └── js/
+│   │       ├── app.js      # 入口：window 绑定 + 初始化
+│   │       ├── editor.js   # CodeMirror 编辑器
+│   │       ├── sidebar.js  # 文件树、侧边栏
+│   │       ├── chat.js     # 对话面板 + SSE
+│   │       ├── workspace.js# 工作区标签 + 管理
+│   │       ├── config.js   # 配置可视化编辑
+│   │       └── icons.js    # SF Symbols SVG 图标
+│   └── .npm_cache/        # CDN 文件缓存（自动生成）
 ├── tools/                  # 工具模块
 │   ├── __init__.py
 │   ├── file_ops.py         # 文件操作器
-│   └── shell_executor.py   # Shell 执行器
+│   ├── shell_executor.py   # Shell 执行器
+│   └── workspace_manager.py# 多工作区管理器
 ├── debug_log/              # 调试日志模块（新增）
 │   ├── __init__.py
 │   └── logger.py           # 调试日志记录器
@@ -133,13 +147,29 @@ plugins/mai_study_code/
 
 #### 5. Web 服务 (web/)
 
-插件内嵌 HTTP 服务器，提供实时监控面板和 Bot 自写页面托管：
+插件内嵌 HTTP 服务器，提供实时监控面板、Bot 自写页面托管和工作区管理：
 
-- **监控面板**：`/` — 实时查看沙箱、缓存、知识库、上下文窗口状态
-- **SSE 实时推送**：`/api/stream` — 操作日志即时推送
+- **监控面板**：`/` — 实时查看编辑器、文件树、对话、配置
+- **SSE 实时推送**：`/api/stream` — 操作日志即时推送至对话面板
 - **Bot 自写页面**：`/pages/<name>` — Bot 可以自己写 HTML 页面
 - **主题皮肤**：`/static/theme.css` — CSS 变量方案，Bot 可修改换肤
-- **REST API**：`/api/status`、`/api/knowledge`、`/api/cache`、`/api/sandbox`、`/api/debug_log`
+- **插件配置**：左侧活动栏齿轮图标 → 打开 `config.toml` 可视化/文本编辑
+- **工作区管理**：顶部栏右侧齿轮 → 添加/切换/管理本地或远程 SSH 工作区
+- **LLM 对话**：右侧对话面板直接与 Bot 对话（Claude Code 风格）
+
+前端采用模块化 ES module 架构：
+
+```
+monitor.html → static/js/app.js
+                  ├── editor.js      CodeMirror 6 编辑器
+                  ├── sidebar.js     文件树 + 已打开/最近打开
+                  ├── chat.js        对话 + SSE
+                  ├── workspace.js   工作区标签 + CRUD
+                  ├── config.js      可视化配置编辑
+                  └── icons.js       SF Symbols 图标库
+```
+
+所有 onclick 函数在 `app.js` 中统一绑定到 `window`，消除模块作用域与 HTML onclick 的矛盾。
 
 配置方式：在 `config.toml` 中设置 `[web]` 段，支持固定端口或自动发现。
 
