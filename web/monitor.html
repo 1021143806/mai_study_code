@@ -4,17 +4,11 @@
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
 <title>麦麦学代码</title>
-<script type="importmap">
-{
-  "imports": {
-    "codemirror": "/npm/codemirror@6.0.2/+esm",
-    "@codemirror/lang-python": "/npm/@codemirror/lang-python@6.1.6/+esm",
-    "@codemirror/theme-one-dark": "/npm/@codemirror/theme-one-dark@6.1.2/+esm"
-  }
-}
-</script>
 <link rel="stylesheet" href="static/css/monitor.css">
 <style>
+/* 编辑容器适配 Monaco */
+#editor-container { overflow: hidden; }
+#editor-container .monaco-editor { border-radius: 0; }
 /* 工具结果卡片 */
 .tool-card { margin: 4px 0 8px 0; background: rgba(0,0,0,0.15); border: 1px solid var(--border-subtle); border-radius: var(--radius-sm); overflow: hidden; font-size: 11.5px; }
 .tool-card-header { display: flex; align-items: center; gap: 6px; padding: 4px 10px; border-bottom: 1px solid var(--border-subtle); font-weight: 600; color: var(--text-secondary); }
@@ -166,6 +160,7 @@
 </div>
 
 <script src="static/js/ui.js"></script>
-<script type="module" src="static/js/editor-bootstrap.js"></script>
+<script src="static/js/editor-bootstrap.js"></script>
+<script type="module" src="static/js/app.js"></script>
 </body>
 </html>

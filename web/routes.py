@@ -58,6 +58,9 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_get("/api/files", lambda r: _handle_files(r, plugin))
     app.router.add_get("/api/file", lambda r: _handle_file_read(r, plugin))
     app.router.add_post("/api/file/write", lambda r: _handle_file_write(r, plugin))
+    app.router.add_post("/api/file/delete", lambda r: _handle_file_delete(r, plugin))
+    app.router.add_post("/api/file/rename", lambda r: _handle_file_rename(r, plugin))
+    app.router.add_post("/api/file/create", lambda r: _handle_file_create(r, plugin))
     app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
     app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
     app.router.add_post("/api/chat", lambda r: _handle_chat(r, plugin))
@@ -84,6 +87,8 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
     # 通用静态文件服务（CSS, JS, 图片等）
     app.router.add_get("/static/{path:.+}", lambda r: _handle_static_file(r, plugin))
+    # Monaco Editor 服务
+    app.router.add_get("/monaco/{path:.+}", lambda r: _handle_monaco_file(r))
     # 代理 jsDelivr /npm/ 路径，用于本地化 CodeMirror ESM 依赖
     app.router.add_get("/npm/{path:.+}", lambda r: _handle_npm_proxy(r))
 
@@ -385,6 +390,135 @@ async def _handle_file_write(request: web.Request, plugin: "MaiStudyCodePlugin")
         return web.json_response({"success": True, "path": file_path})
     except Exception as e:
         return web.json_response({"error": f"写入失败: {e}"}, status=500)
+
+
+async def _handle_file_delete(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """删除文件或目录。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+    file_path = str(body.get("path", "") or "").strip()
+    if not file_path:
+        return web.json_response({"error": "缺少 path 参数"}, status=400)
+    ws_name = str(body.get("workspace", "") or "").strip()
+    mgr = plugin._workspace_manager
+    if ws_name or (mgr and mgr.get_active()):
+        ws = mgr.get_workspace(ws_name or mgr.get_active())
+        if not ws:
+            return web.json_response({"error": "工作区不存在"}, status=404)
+        return await _delete_via_workspace(ws, file_path)
+    # 旧逻辑向后兼容
+    full_path = os.path.join(plugin._workspace_dir, file_path)
+    if not os.path.realpath(full_path).startswith(os.path.realpath(plugin._workspace_dir)):
+        return web.json_response({"error": "路径不在工作区内"}, status=403)
+    return _delete_local(full_path, file_path)
+
+
+async def _delete_via_workspace(ws, path: str) -> web.Response:
+    """通过工作区实例删除文件/目录。"""
+    full = ws._resolve(path)
+    return _delete_local(full, path)
+
+
+def _delete_local(full_path: str, display_path: str) -> web.Response:
+    try:
+        if os.path.isfile(full_path):
+            os.remove(full_path)
+            return web.json_response({"success": True, "path": display_path})
+        elif os.path.isdir(full_path):
+            os.rmdir(full_path)  # 只删除空目录
+            return web.json_response({"success": True, "path": display_path})
+        else:
+            return web.json_response({"error": "路径不存在"}, status=404)
+    except OSError as e:
+        return web.json_response({"error": f"删除失败: {e}", "path": display_path}, status=400)
+
+
+async def _handle_file_rename(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """重命名文件或目录。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+    old_path = str(body.get("path", "") or "").strip()
+    new_name = str(body.get("name", "") or "").strip()
+    if not old_path or not new_name:
+        return web.json_response({"error": "缺少 path 或 name 参数"}, status=400)
+    ws_name = str(body.get("workspace", "") or "").strip()
+    mgr = plugin._workspace_manager
+    if ws_name or (mgr and mgr.get_active()):
+        ws = mgr.get_workspace(ws_name or mgr.get_active())
+        if not ws:
+            return web.json_response({"error": "工作区不存在"}, status=404)
+        return await _rename_via_workspace(ws, old_path, new_name)
+    full_old = os.path.join(plugin._workspace_dir, old_path)
+    parent = os.path.dirname(full_old)
+    full_new = os.path.join(parent, new_name)
+    if not os.path.realpath(full_old).startswith(os.path.realpath(plugin._workspace_dir)):
+        return web.json_response({"error": "路径不在工作区内"}, status=403)
+    return _rename_local(full_old, full_new, old_path, new_name)
+
+
+async def _rename_via_workspace(ws, old_path: str, new_name: str) -> web.Response:
+    full_old = ws._resolve(old_path)
+    parent = os.path.dirname(full_old)
+    full_new = os.path.join(parent, new_name)
+    return _rename_local(full_old, full_new, old_path, new_name)
+
+
+def _rename_local(full_old: str, full_new: str, display_old: str, display_new: str) -> web.Response:
+    try:
+        os.rename(full_old, full_new)
+        return web.json_response({"success": True, "path": display_old, "name": display_new})
+    except OSError as e:
+        return web.json_response({"error": f"重命名失败: {e}"}, status=400)
+
+
+async def _handle_file_create(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """新建文件或目录。"""
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+    parent_dir = str(body.get("parent", "") or "").strip()
+    name = str(body.get("name", "") or "").strip()
+    is_dir = body.get("is_dir", False)
+    if not name:
+        return web.json_response({"error": "缺少 name 参数"}, status=400)
+    ws_name = str(body.get("workspace", "") or "").strip()
+    mgr = plugin._workspace_manager
+    if ws_name or (mgr and mgr.get_active()):
+        ws = mgr.get_workspace(ws_name or mgr.get_active())
+        if not ws:
+            return web.json_response({"error": "工作区不存在"}, status=404)
+        return await _create_via_workspace(ws, parent_dir, name, is_dir)
+    base = plugin._workspace_dir
+    if parent_dir:
+        base = os.path.join(base, parent_dir)
+    full = os.path.join(base, name)
+    if not os.path.realpath(full).startswith(os.path.realpath(plugin._workspace_dir)):
+        return web.json_response({"error": "路径不在工作区内"}, status=403)
+    return _create_local(full, name, is_dir)
+
+
+async def _create_via_workspace(ws, parent_dir: str, name: str, is_dir: bool) -> web.Response:
+    base = ws._resolve(parent_dir)
+    full = os.path.join(base, name)
+    return _create_local(full, name, is_dir)
+
+
+def _create_local(full_path: str, name: str, is_dir: bool) -> web.Response:
+    try:
+        if is_dir:
+            os.makedirs(full_path, exist_ok=True)
+        else:
+            os.makedirs(os.path.dirname(full_path), exist_ok=True)
+            if not os.path.isfile(full_path):
+                open(full_path, "a").close()
+        return web.json_response({"success": True, "name": name, "is_dir": is_dir})
+    except OSError as e:
+        return web.json_response({"error": f"创建失败: {e}"}, status=400)
 
 
 async def _handle_execute(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
@@ -1045,6 +1179,7 @@ def _normalize_npm_path(path: str) -> str:
     return path
 
 _STATIC_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "static"))
+_MONACO_DIR = os.path.normpath(os.path.join(_STATIC_DIR, "monaco-editor"))
 
 
 async def _handle_static_file(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
@@ -1062,9 +1197,43 @@ async def _handle_static_file(request: web.Request, plugin: "MaiStudyCodePlugin"
         ".json": "application/json",
         ".png": "image/png",
         ".svg": "image/svg+xml",
+        ".ttf": "font/ttf",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
     }
     _, ext = os.path.splitext(path)
     ct = ext_map.get(ext.lower(), "application/octet-stream")
+    with open(full_path, "rb") as f:
+        body = f.read()
+    return web.Response(body=body, content_type=ct)
+
+
+async def _handle_monaco_file(request: web.Request) -> web.Response:
+    """服务 Monaco Editor 的静态文件（vs/ 目录下的所有资源）。
+
+    Monaco 使用 AMD require 按需加载模块，所有模块路径相对于
+    /monaco/vs/，因此这个路由必须正确处理 vs/ 下所有子路径。
+    """
+    path = request.match_info.get("path", "")
+    full_path = os.path.normpath(os.path.join(_MONACO_DIR, path))
+    if not full_path.startswith(_MONACO_DIR):
+        raise web.HTTPNotFound()
+    if not os.path.isfile(full_path):
+        raise web.HTTPNotFound()
+    ext_map = {
+        ".css": "text/css",
+        ".js": "application/javascript",
+        ".json": "application/json",
+        ".png": "image/png",
+        ".svg": "image/svg+xml",
+        ".ttf": "font/ttf",
+        ".woff": "font/woff",
+        ".woff2": "font/woff2",
+        ".map": "application/json",
+    }
+    _, ext = os.path.splitext(path)
+    ct = ext_map.get(ext.lower(), "application/octet-stream")
+    # Monaco 的 JS 文件是 AMD 格式，不需要 module 类型
     with open(full_path, "rb") as f:
         body = f.read()
     return web.Response(body=body, content_type=ct)

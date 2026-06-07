@@ -1,7 +1,7 @@
 // 应用入口 — 导入所有模块，绑定 window 函数，初始化
 
-import { createEditor, switchEditorLang, openFile, closeTab, switchToTab, runCode, saveFile, openFileByName, setRenderSidebarCallback } from './editor.js';
-import { loadFileTree, renderSidebar, switchSidebar, addRecentFile, toggleWsRoot } from './sidebar.js';
+import { switchEditorLang, openFile, closeTab, switchToTab, runCode, saveFile, openFileByName, setRenderSidebarCallback, onMonacoReady, getEditor } from './editor.js';
+import { loadFileTree, renderSidebar, switchSidebar, addRecentFile } from './sidebar.js';
 import { connectSSE, sendChatMsg, clearChat, addAssistantLog } from './chat.js';
 import { loadWorkspaces, switchWorkspace, showWsDialog, closeWsDialog, saveWsFromForm, deleteWs, testWsConn } from './workspace.js';
 import { toggleConfigVisual, updateConfigField, saveConfigVisual } from './config.js';
@@ -19,9 +19,11 @@ window.openFileByName = openFileByName;
 window.runCode = runCode;
 window.saveFile = saveFile;
 
+// 编辑器 ↔ sidebar bridge
+window.__addRecentFile = addRecentFile;
+
 // 侧边栏
 window.refreshFileTree = loadFileTree;
-window.toggleWsRoot = toggleWsRoot;
 
 // 对话
 window.sendChatMsg = sendChatMsg;
@@ -223,7 +225,71 @@ window.clearLogPanel = function() {
 // 初始化
 // ================================================================
 
-createEditor();
+// 等待 Monaco 加载完成后初始化编辑器
+function initEditor() {
+  const container = document.getElementById('editor-container');
+  if (!container || !window.monaco) return;
+
+  const doc = (window.__activeTab && window.__activeTab.content) || '';
+
+  const editor = monaco.editor.create(container, {
+    value: doc,
+    language: 'python',
+    theme: 'vs-dark',
+    fontSize: 13,
+    fontFamily: "'SF Mono', 'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+    lineNumbers: 'on',
+    minimap: { enabled: false },
+    scrollBeyondLastLine: false,
+    automaticLayout: true,
+    tabSize: 4,
+    renderWhitespace: 'selection',
+    bracketPairColorization: { enabled: true },
+    padding: { top: 8 },
+    smoothScrolling: true,
+    cursorBlinking: 'smooth',
+    cursorSmoothCaretAnimation: 'on',
+    wordWrap: 'off',
+  });
+
+  // 监听内容变化
+  editor.onDidChangeModelContent(() => {
+    if (window.__activeTab) {
+      window.__activeTab.saved = false;
+    }
+  });
+
+  // 监听光标位置变化
+  editor.onDidChangeCursorPosition((e) => {
+    document.getElementById('status-ln').textContent = e.position.lineNumber;
+    document.getElementById('status-col').textContent = e.position.column;
+  });
+
+  // 保存快捷键 (Ctrl+S / Cmd+S)
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.KeyS, function() {
+    saveFile();
+  });
+
+  // 运行快捷键 (Ctrl+Enter)
+  editor.addCommand(monaco.KeyMod.CtrlCmd | monaco.KeyCode.Enter, function() {
+    runCode();
+  });
+
+  // 通知编辑器模块
+  onMonacoReady(editor);
+
+  window.logToPanel('Monaco Editor 已就绪', 'ok');
+}
+
+if (window.__monacoReady && window.monaco) {
+  initEditor();
+} else {
+  document.addEventListener('monaco-ready', () => {
+    if (window.monaco) initEditor();
+    else window.logToPanel('Monaco Editor 加载失败', 'err');
+  });
+}
+
 connectSSE();
 updateClock();
 // 先加载工作区，再加载文件树（工作区决定目录）

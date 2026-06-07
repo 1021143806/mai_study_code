@@ -1,5 +1,5 @@
 // 配置可视化编辑模块
-import { editorView, activeTab } from './editor.js';
+import { getEditor, activeTab } from './editor.js';
 import { addAssistantLog } from './chat.js';
 
 // ================================================================
@@ -27,7 +27,8 @@ export function toggleConfigVisual() {
     btn.textContent = '文本编辑';
     editorEl.style.display = 'none';
     container.style.display = '';
-    const toml = editorView ? editorView.state.doc.toString() : '';
+    const ed = getEditor();
+    const toml = ed ? ed.getValue() : '';
     configSections = parseToml(toml);
     renderConfigForm(container, configSections);
   } else {
@@ -35,12 +36,10 @@ export function toggleConfigVisual() {
     container.style.display = 'none';
     editorEl.style.display = '';
     const newToml = tomlFromSections(configSections);
-    if (editorView) {
-      editorView.dispatch({
-        changes: { from: 0, to: editorView.state.doc.length, insert: newToml }
-      });
+    const ed = getEditor();
+    if (ed) {
+      ed.setValue(newToml);
       activeTab.saved = false;
-      // trigger updateTabs via the editor's update listener
     }
   }
 }

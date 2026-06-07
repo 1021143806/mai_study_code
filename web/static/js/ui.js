@@ -378,25 +378,23 @@ function addAssistantLog(msg, type) {
 // 文件树
 // ================================================================
 
-async function loadFileTree() {
-  try {
-    const ws = window.__activeWorkspace || '';
-    const wsParam = ws ? `?workspace=${encodeURIComponent(ws)}` : '';
-    const [filesResp, wsResp] = await Promise.all([
-      fetch('/api/files' + wsParam),
-      fetch(`/api/workspaces/${encodeURIComponent(ws)}`).catch(() => null),
-    ]);
-    const data = await filesResp.json();
-    fileTreeData = data.tree || [];
-    const root = document.getElementById('file-tree');
-    if (!root) return;
-    const wsName = ws || '工作区';
-    // 解析工作区路径
-    let wsPath = '';
-    if (wsResp && wsResp.ok) {
-      const wsData = await wsResp.json();
-      wsPath = wsData.path || '';
-    }
+// 侧边栏、文件树由 sidebar.js 管理（通过 app.js 桥接）
+// 此处保留空桩函数，确保页面在 app.js 加载前不会报错
+async function loadFileTree() {}
+function friendlyPath(p) { return p; }
+function toggleWsRoot(el) {}
+function renderFileTree(tree, container, indent) {}
+async function loadChildrenForNode(node, container, indent, onLoaded) {}
+function renderSidebar() {}
+function addRecentFile(path) {}
+function switchSidebar(name) {}
+async function loadKnowledge() {}
+async function loadPages() {}
+
+
+// ================================================================
+// 工具函数
+// ================================================================
     root.innerHTML = `<div class="tree-item" style="--indent:0" onclick="toggleWsRoot(this)">
       <span class="tree-chevron" style="font-size:9px;width:14px;text-align:center;flex-shrink:0;opacity:0.4">▶</span>
       <span class="tree-icon">${icon('folder')}</span>
@@ -837,76 +835,10 @@ window.setEditorLang = function(lang) {
   if (el) el.value = lang;
   document.getElementById('status-lang').textContent = lang;
 };
-window.switchToTab = function(index) {
-  if (!openTabs[index]) return;
-  if (window.editorView && !activeTab.saved) activeTab.content = window.editorView.state.doc.toString();
-  activeTab = openTabs[index];
-  if (window.editorView) window.editorView.dispatch({ changes: { from: 0, to: window.editorView.state.doc.length, insert: activeTab.content } });
-  renderWsTabs();
-  var p = activeTab.path;
-  if (p.endsWith('.py')) window.setEditorLang('python');
-  else if (p.endsWith('.md')) window.setEditorLang('markdown');
-  else if (p.endsWith('.json')) window.setEditorLang('json');
-  else window.setEditorLang('text');
-};
-window.closeTab = function(index) {
-  if (openTabs.length <= 1) return;
-  var wasActive = openTabs[index].path === activeTab.path;
-  openTabs.splice(index, 1);
-  if (wasActive) {
-    activeTab = openTabs[Math.min(index, openTabs.length - 1)];
-    if (window.editorView) window.editorView.dispatch({ changes: { from: 0, to: window.editorView.state.doc.length, insert: activeTab.content } });
-  }
-};
-window.openFile = function(path, content) {
-  var existing = openTabs.find(function(t) { return t.path === path; });
-  if (existing) { activeTab = existing; window.switchToTab(openTabs.indexOf(existing)); return; }
-  openTabs.push({ path: path, content: content, saved: true });
-  activeTab = openTabs[openTabs.length - 1];
-  if (window.editorView) window.editorView.dispatch({ changes: { from: 0, to: window.editorView.state.doc.length, insert: content } });
-  recentFiles = [path].concat(recentFiles.filter(function(f) { return f !== path; }));
-  renderSidebar();
-};
-window.openFileByName = function(path) {
-  var wsQ = activeWorkspace ? '&workspace=' + encodeURIComponent(activeWorkspace) : '';
-  fetch('/api/file?path=' + encodeURIComponent(path) + wsQ)
-    .then(function(r) { return r.json(); })
-    .then(function(data) { if (data.content !== undefined) window.openFile(path, data.content); })
-    .catch(function() {});
-};
-window.runCode = async function() {
-  if (!window.editorView) { logToPanel('编辑器尚未加载', 'warn'); return; }
-  var code = window.editorView.state.doc.toString();
-  if (!code.trim()) { logToPanel('代码为空', 'warn'); return; }
-  logToPanel('执行: ' + code.split('\n')[0].substring(0, 60) + '...', 'info');
-  var out = document.getElementById('editor-output');
-  if (!out) return;
-  out.style.display = 'block'; out.className = ''; out.textContent = '执行中...';
-  try {
-    var resp = await fetch('/api/execute', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify({ code: code }) });
-    var data = await resp.json();
-    if (data.success) { out.textContent = data.stdout || '(无输出)'; logToPanel('执行成功 ' + data.execution_time_ms + 'ms', 'ok'); }
-    else { out.textContent = data.stderr || data.error || '未知错误'; out.className = 'err'; logToPanel('执行失败', 'err'); }
-  } catch (e) { out.textContent = '请求失败: ' + e.message; out.className = 'err'; logToPanel('请求失败: ' + e.message, 'err'); }
-};
-window.saveFile = async function() {
-  if (!window.editorView) return;
-  activeTab.content = window.editorView.state.doc.toString();
-  try {
-    var body = { path: activeTab.path, content: activeTab.content };
-    if (activeWorkspace) body.workspace = activeWorkspace;
-    var resp = await fetch('/api/file/write', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(body) });
-    var data = await resp.json();
-    if (data.success !== false && !data.error) { activeTab.saved = true; logToPanel('已保存: ' + activeTab.path, 'ok'); }
-    else { logToPanel('保存失败: ' + (data.error || '未知错误'), 'err'); }
-  } catch (e) { logToPanel('保存异常: ' + e.message, 'err'); }
-};
 
 // ================================================================
 // 暴露给 HTML onclick 的函数
 // ================================================================
-window.refreshFileTree = loadFileTree;
-window.toggleWsRoot = toggleWsRoot;
 window.sendChatMsg = sendChatMsg;
 window.clearChat = clearChat;
 window.addAssistantLog = addAssistantLog;

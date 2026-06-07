@@ -1,45 +1,30 @@
-// CodeMirror 编辑器引导
-// 只从 codemirror 综合包导入，不额外加载子包以避免版本冲突
-import { EditorView, basicSetup } from 'codemirror';
-import { python } from '@codemirror/lang-python';
-import { oneDark } from '@codemirror/theme-one-dark';
+// Monaco Editor 启动引导
+// 加载 Monaco AMD loader，然后初始化编辑器
+// 完成后设置 window.monaco 并触发 app.js 中的初始化
 
-try {
-  const container = document.getElementById('editor-container');
-  if (!container) throw new Error('editor-container 不存在');
+const MONACO_BASE = '/monaco';
 
-  const doc = (window.__activeTab && window.__activeTab.content) || '';
-
-  // 不导入 EditorState，直接用 EditorView 构造
-  window.editorView = new EditorView({
-    doc: doc,
-    extensions: [
-      basicSetup || [],
-      EditorView.editable.of(true),
-      EditorView.theme({
-        '.cm-content': {
-          '&::before': {
-            content: doc ? '"在此编写代码..."' : 'none',
-            color: 'rgba(255,255,255,0.2)',
-            fontStyle: 'italic'
-          }
-        }
-      }),
-      EditorView.updateListener.of(update => {
-        if (update.docChanged && window.__activeTab) { window.__activeTab.saved = false; }
-        const pos = update.state.selection.main.head;
-        const line = update.state.doc.lineAt(pos);
-        document.getElementById('status-ln').textContent = line.number;
-        document.getElementById('status-col').textContent = pos - line.from + 1;
-      }),
-      python(),
-      oneDark,
-    ],
-    parent: container,
-  });
-
-  window.logToPanel('编辑器已就绪', 'ok');
-} catch (e) {
-  window.logToPanel('编辑器加载失败: ' + e.message, 'err');
-  console.error('CodeMirror Error:', e);
-}
+(function() {
+  var script = document.createElement('script');
+  script.src = MONACO_BASE + '/vs/loader.js';
+  script.onload = function() {
+    // 配置 require baseUrl
+    require.config({
+      baseUrl: MONACO_BASE + '/vs',
+      paths: { 'vs': MONACO_BASE + '/vs' }
+    });
+    // 加载编辑器主模块
+    require(['vs/editor/editor.main'], function() {
+      // Monaco 已就绪，设置为全局变量，app.js 会检测并使用它
+      window.__monacoReady = true;
+      // 触发一个自定义事件通知 app.js
+      document.dispatchEvent(new Event('monaco-ready'));
+    });
+  };
+  script.onerror = function() {
+    console.error('Monaco loader.js 加载失败');
+    window.__monacoReady = false;
+    document.dispatchEvent(new Event('monaco-ready'));
+  };
+  document.head.appendChild(script);
+})();
