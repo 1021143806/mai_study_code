@@ -7,6 +7,8 @@ plugins/mai_study_code/
 ├── _manifest.json          # 插件元数据
 ├── plugin.py               # 插件入口
 ├── config.toml             # 插件配置
+├── data/                   # 运行时数据
+│   └── workspaces.json     # 工作区配置
 ├── sandbox/                # 安全沙箱
 │   ├── executor.py         # 子进程隔离执行器
 │   ├── ast_checker.py      # AST 安全检查

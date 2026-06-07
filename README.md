@@ -42,7 +42,9 @@ plugins/mai_study_code/
 ├── _manifest.json          # 插件元数据 (Manifest v2)
 ├── plugin.py               # 插件入口 (MaiBotPlugin)
 ├── README.md               # 本文件
-├── config.toml             # 插件配置
+├── config.toml             # 插件配置（不纳入 git）
+├── data/                   # 运行时数据（不纳入 git）
+│   └── workspaces.json     # 工作区配置
 ├── sandbox/                # 安全沙箱模块
 │   ├── __init__.py
 │   ├── limits.py           # 白名单/黑名单/资源限制配置

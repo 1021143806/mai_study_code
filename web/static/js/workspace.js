@@ -24,19 +24,25 @@ export async function loadWorkspaces() {
 }
 
 function renderWsTabs() {
-  const container = document.getElementById('ws-tabs');
+  const container = document.getElementById('nav-tabs');
   if (!container) return;
-  container.innerHTML = workspaces.map(ws => {
+  // 移除旧的 workspace tab 元素
+  container.querySelectorAll('[data-ws]').forEach(el => el.remove());
+  // 在第一个固定 tab 前插入工作区 tab
+  const firstFixed = container.querySelector('[data-page]');
+  workspaces.forEach(ws => {
     const isActive = ws.name === activeWorkspace;
+    const div = document.createElement('div');
+    div.className = 'nav-tab' + (isActive ? ' active' : '');
+    div.dataset.ws = ws.name;
+    div.textContent = ws.name;
+    div.onclick = () => switchWorkspace(ws.name);
     const userLabel = ws.type === 'ssh'
       ? (ws.username || 'root') + '@' + (ws.host || '?')
       : ws.type === 'local-root' ? 'root' : 'a1';
-    return `<div class="ws-tab${isActive ? ' active' : ''}" onclick="switchWorkspace('${escHtml(ws.name)}')" title="${ws.type}">
-      <span class="ws-dot"></span>
-      <span>${escHtml(ws.name)}</span>
-      <span class="ws-user">(${escHtml(userLabel)})</span>
-    </div>`;
-  }).join('');
+    div.title = ws.type + ': ' + userLabel;
+    container.insertBefore(div, firstFixed);
+  });
 }
 
 export function escHtml(s) {
@@ -56,6 +62,8 @@ export async function switchWorkspace(name) {
     if (data.success) {
       activeWorkspace = name;
       window.__activeWorkspace = name;
+      // 显示编辑器面板
+      document.getElementById('editor-panel').style.display = '';
       renderWsTabs();
       loadFileTree();
     }
@@ -63,7 +71,7 @@ export async function switchWorkspace(name) {
 }
 
 // ================================================================
-// 管理弹窗
+// 管理弹窗 — 卡片式布局
 // ================================================================
 
 export function showWsDialog() {
@@ -74,19 +82,24 @@ export function showWsDialog() {
     div.className = 'overlay';
     div.onclick = function(e) { if (e.target === this) closeWsDialog(); };
     div.innerHTML = `
-      <div class="overlay-box ws-dialog">
-        <h2 style="font-size:16px;margin-bottom:12px">工作区管理</h2>
-        <div id="ws-list"></div>
-        <div style="margin-top:12px;padding-top:12px;border-top:1px solid var(--border-subtle)">
-          <h3 style="font-size:12px;margin-bottom:8px;color:var(--text-secondary)">添加工作区</h3>
-          <div style="display:grid;grid-template-columns:1fr 1fr;gap:6px">
+      <div class="overlay-box ws-dialog" style="max-width:560px">
+        <div style="display:flex;align-items:center;justify-content:space-between;margin-bottom:16px">
+          <h2 style="font-size:16px;font-weight:700">工作区管理</h2>
+          <button onclick="closeWsDialog()" class="secondary" style="font-size:11px;padding:4px 12px">完成</button>
+        </div>
+        <div id="ws-list" style="display:flex;flex-direction:column;gap:8px;margin-bottom:12px"></div>
+
+        <!-- 添加工作区 — 折叠卡片 -->
+        <details style="background:var(--glass-hover);border:1px solid var(--border-subtle);border-radius:var(--radius-md);padding:8px 12px">
+          <summary style="font-size:12px;font-weight:600;color:var(--text-secondary);cursor:pointer;user-select:none">+ 添加工作区</summary>
+          <div style="margin-top:10px;display:grid;grid-template-columns:1fr 1fr;gap:6px">
             <input id="ws-name" placeholder="名称" style="grid-column:1/3">
             <select id="ws-type">
-              <option value="local-sandbox">本地沙箱 (a1)</option>
+              <option value="local-sandbox">本地沙箱</option>
               <option value="local-root">本地 Root</option>
               <option value="ssh">SSH 远程</option>
             </select>
-            <input id="ws-path" placeholder="路径 (默认 ~)" value="/home/a1">
+            <input id="ws-path" placeholder="路径" value="workspace/">
           </div>
           <div id="ws-ssh-fields" style="display:none;margin-top:6px;grid-template-columns:1fr 1fr;gap:6px">
             <input id="ws-host" placeholder="主机地址">
@@ -95,8 +108,7 @@ export function showWsDialog() {
             <input id="ws-pass" placeholder="密码" type="password">
           </div>
           <button onclick="saveWsFromForm()" style="margin-top:8px;width:100%">添加</button>
-        </div>
-        <button onclick="closeWsDialog()" class="secondary" style="margin-top:8px;width:100%">关闭</button>
+        </details>
       </div>`;
     document.body.appendChild(div);
 
@@ -118,19 +130,26 @@ function renderWsList() {
   const el = document.getElementById('ws-list');
   if (!el) return;
   el.innerHTML = workspaces.map(ws => {
-    const userLabel = ws.type === 'ssh'
-      ? `${ws.username||'root'}@${ws.host||'?'}`
-      : ws.type === 'local-root' ? 'root' : 'a1';
     const isActive = ws.name === activeWorkspace;
-    return `<div style="display:flex;align-items:center;justify-content:space-between;padding:4px 0;border-bottom:1px solid var(--border-subtle)">
-      <div>
-        <strong>${escHtml(ws.name)}</strong>
-        <span style="font-size:11px;color:var(--text-muted);margin-left:6px">${escHtml(userLabel)}</span>
-        ${isActive ? '<span style="font-size:10px;color:var(--success);margin-left:6px">● 当前</span>' : ''}
+    const isSsh = ws.type === 'ssh';
+    const userLabel = isSsh ? `${ws.username||'root'}@${ws.host||'?'}` : (ws.type === 'local-root' ? 'root' : 'a1');
+    const pathInfo = isSsh ? `${(ws.host||'?')}:${ws.port||22}` : (ws.path || '/');
+    const typeIcon = isSsh ? '🌐' : (ws.type === 'local-root' ? '⚡' : '💻');
+
+    return `<div style="background:var(--glass-hover);border:1px solid ${isActive ? 'var(--accent)' : 'var(--border-subtle)'};border-radius:var(--radius-md);padding:12px 14px;display:flex;align-items:center;gap:12px;transition:all 0.2s">
+      <div style="font-size:22px;width:36px;text-align:center;flex-shrink:0">${typeIcon}</div>
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:6px">
+          <strong style="font-size:13px">${escHtml(ws.name)}</strong>
+          <span style="font-size:10px;background:var(--glass-active);padding:1px 6px;border-radius:4px;color:var(--text-muted)">${ws.type === 'local-sandbox' ? '沙箱' : ws.type === 'local-root' ? 'Root' : 'SSH'}</span>
+          ${isActive ? '<span style="font-size:10px;color:var(--success)">● 当前</span>' : ''}
+        </div>
+        <div style="font-size:11px;color:var(--text-muted);margin-top:2px">${escHtml(pathInfo)} · ${escHtml(userLabel)}</div>
       </div>
-      <div style="display:flex;gap:4px">
-        ${!isActive ? `<button class="secondary" style="font-size:10px;padding:2px 8px" onclick="switchWorkspace('${escHtml(ws.name)}')">切换</button>` : ''}
-        <button class="danger" style="font-size:10px;padding:2px 8px" onclick="deleteWs('${escHtml(ws.name)}')">删除</button>
+      <div style="display:flex;gap:4px;flex-shrink:0">
+        ${!isActive ? `<button class="secondary" style="font-size:10px;padding:3px 10px" onclick="switchWorkspace('${escHtml(ws.name)}')">切换</button>` : ''}
+        <button class="secondary" style="font-size:10px;padding:3px 8px" onclick="testWsConn('${escHtml(ws.name)}', this)" title="测试连接">🔍</button>
+        <button class="danger" style="font-size:10px;padding:3px 8px" onclick="deleteWs('${escHtml(ws.name)}')">删除</button>
       </div>
     </div>`;
   }).join('');
@@ -140,13 +159,28 @@ function renderWsList() {
 // CRUD
 // ================================================================
 
+export async function testWsConn(name, btn) {
+  const orig = btn.textContent;
+  btn.textContent = '⏳';
+  btn.disabled = true;
+  try {
+    const resp = await fetch(`/api/workspaces/${encodeURIComponent(name)}/test`, { method: 'POST' });
+    const data = await resp.json();
+    btn.textContent = data.success ? '✅' : '❌';
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+  } catch (e) {
+    btn.textContent = '❌';
+    setTimeout(() => { btn.textContent = orig; btn.disabled = false; }, 1500);
+  }
+}
+
 export async function saveWsFromForm() {
   const name = document.getElementById('ws-name').value.trim();
   const type = document.getElementById('ws-type').value;
   if (!name) return;
   const config = { name, type };
   if (type === 'local-sandbox' || type === 'local-root') {
-    config.path = document.getElementById('ws-path').value.trim() || '/home/a1';
+    config.path = document.getElementById('ws-path').value.trim() || 'workspace/';
     if (type === 'local-root') config.password = document.getElementById('ws-pass').value || '';
   } else {
     config.host = document.getElementById('ws-host').value.trim();

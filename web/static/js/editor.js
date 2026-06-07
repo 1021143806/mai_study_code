@@ -3,6 +3,8 @@ import { EditorView, basicSetup } from 'codemirror';
 import { EditorState } from '@codemirror/state';
 import { python } from '@codemirror/lang-python';
 import { oneDark } from '@codemirror/theme-one-dark';
+import { keymap } from '@codemirror/view';
+import { defaultKeymap, history, historyKeymap } from '@codemirror/commands';
 import { iconFile } from './icons.js';
 
 // ================================================================
@@ -27,7 +29,11 @@ export function setRenderSidebarCallback(fn) {
 export function createEditor() {
   const container = document.getElementById('editor-container');
   const ext = [
-    basicSetup,
+    basicSetup || [],
+    keymap.of(defaultKeymap),
+    history(),
+    keymap.of(historyKeymap),
+    EditorView.editable.of(true),
     placeholder('在此编写代码...'),
     EditorView.updateListener.of(update => {
       if (update.docChanged) { activeTab.saved = false; updateTabs(); }
@@ -70,7 +76,11 @@ export function switchEditorLang(lang) {
   editorView.destroy();
   const container = document.getElementById('editor-container');
   const ext = [
-    basicSetup,
+    basicSetup || [],
+    keymap.of(defaultKeymap),
+    history(),
+    keymap.of(historyKeymap),
+    EditorView.editable.of(true),
     placeholder('在此编写代码...'),
     EditorView.updateListener.of(update => {
       if (update.docChanged) { activeTab.saved = false; updateTabs(); }

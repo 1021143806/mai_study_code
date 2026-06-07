@@ -112,8 +112,18 @@
   </div>
 </div>
 
+<!-- 底部日志栏 -->
+<div id="log-panel" style="height:0;overflow:hidden;background:var(--glass-mid);backdrop-filter:blur(var(--blur-card));-webkit-backdrop-filter:blur(var(--blur-card));border-top:1px solid var(--border-strong);flex-shrink:0;display:flex;flex-direction:column;transition:height 0.25s var(--ease-out)">
+  <div style="display:flex;align-items:center;justify-content:space-between;padding:4px 14px;border-bottom:1px solid var(--border-subtle);flex-shrink:0">
+    <span style="font-size:11px;font-weight:600;color:var(--text-secondary)">日志输出</span>
+    <button class="secondary" style="font-size:10px;padding:1px 8px" onclick="clearLogPanel()">清空</button>
+  </div>
+  <div id="log-content" style="flex:1;overflow-y:auto;padding:6px 14px;font-family:var(--font-mono);font-size:11px;line-height:1.7;color:var(--text-secondary)"></div>
+</div>
+
 <!-- 状态栏 -->
 <div id="statusbar">
+  <span class="item clickable" id="log-toggle" onclick="toggleLogPanel()" title="切换日志面板">📋 日志</span>
   <span class="item">Ln <span id="status-ln">1</span>, Col <span id="status-col">1</span></span>
   <span class="item">UTF-8</span>
   <span class="item" id="status-lang">Python</span>
@@ -133,5 +143,36 @@
 </div>
 
 <script type="module" src="static/js/app.js"></script>
+
+<!-- 独立脚本：先渲染工作区标签，不依赖 CodeMirror 模块 -->
+<script>
+(async function() {
+  try {
+    const resp = await fetch('/api/workspaces');
+    const data = await resp.json();
+    const wsList = data.workspaces || [];
+    const active = data.active || '';
+    const container = document.getElementById('nav-tabs');
+    if (!container) return;
+    container.querySelectorAll('[data-ws]').forEach(el => el.remove());
+    const firstFixed = container.querySelector('[data-page]');
+    if (!firstFixed) return;
+    wsList.forEach(ws => {
+      const div = document.createElement('div');
+      div.className = 'nav-tab' + (ws.name === active ? ' active' : '');
+      div.dataset.ws = ws.name;
+      div.textContent = ws.name;
+      div.title = ws.type;
+      div.onclick = async function() {
+        await fetch('/api/workspaces/' + encodeURIComponent(ws.name) + '/activate', { method: 'POST' });
+        location.reload();
+      };
+      container.insertBefore(div, firstFixed);
+    });
+  } catch(e) {
+    console.warn('工作区加载失败', e);
+  }
+})();
+</script>
 </body>
 </html>

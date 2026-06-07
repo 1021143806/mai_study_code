@@ -3,7 +3,7 @@
 import { createEditor, switchEditorLang, openFile, closeTab, switchToTab, runCode, saveFile, openFileByName, setRenderSidebarCallback } from './editor.js';
 import { loadFileTree, renderSidebar, switchSidebar, addRecentFile, toggleWsRoot } from './sidebar.js';
 import { connectSSE, sendChatMsg, clearChat, addAssistantLog } from './chat.js';
-import { loadWorkspaces, switchWorkspace, showWsDialog, closeWsDialog, saveWsFromForm, deleteWs } from './workspace.js';
+import { loadWorkspaces, switchWorkspace, showWsDialog, closeWsDialog, saveWsFromForm, deleteWs, testWsConn } from './workspace.js';
 import { toggleConfigVisual, updateConfigField, saveConfigVisual } from './config.js';
 
 // ================================================================
@@ -34,16 +34,20 @@ window.showWsDialog = showWsDialog;
 window.closeWsDialog = closeWsDialog;
 window.saveWsFromForm = saveWsFromForm;
 window.deleteWs = deleteWs;
+window.testWsConn = testWsConn;
 
 // 配置可视化
 window.toggleConfigVisual = toggleConfigVisual;
 window.updateConfigField = updateConfigField;
 window.saveConfigVisual = saveConfigVisual;
 
-// 页面切换
+// 页面切换（监控、我的页面）
 window.switchPage = function(name) {
-  document.getElementById('editor-panel').style.display = name === 'editor' ? '' : 'none';
-  document.querySelectorAll('#topbar .nav-tab').forEach(t => t.classList.remove('active'));
+  const isEditor = name === 'editor';
+  document.getElementById('editor-panel').style.display = isEditor ? '' : 'none';
+  // 取消所有 nav-tab 的 active 状态
+  document.querySelectorAll('#nav-tabs .nav-tab').forEach(t => t.classList.remove('active'));
+  // 激活对应的页面 tab
   const tab = document.querySelector(`[data-page="${name}"]`);
   if (tab) tab.classList.add('active');
 };
@@ -162,6 +166,50 @@ function updateClock() {
   if (el) el.textContent = new Date().toLocaleTimeString();
 }
 setInterval(updateClock, 1000);
+
+// ================================================================
+// 底部日志面板
+// ================================================================
+
+window.logToPanel = function(msg, type) {
+  const el = document.getElementById('log-content');
+  if (!el) return;
+  const now = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.style.cssText = 'padding:1px 0;border-bottom:1px solid var(--border-subtle)';
+  const color = type === 'err' ? 'var(--danger)' : type === 'warn' ? 'var(--warning)' : type === 'ok' ? 'var(--success)' : 'var(--text-secondary)';
+  div.innerHTML = `<span style="color:var(--text-muted);margin-right:6px;font-size:10px">[${now}]</span><span style="color:${color}">${msg}</span>`;
+  el.appendChild(div);
+  // 保留最多 200 条
+  while (el.children.length > 200) el.removeChild(el.firstChild);
+  el.scrollTop = el.scrollHeight;
+};
+
+window.toggleLogPanel = function() {
+  const panel = document.getElementById('log-panel');
+  const toggle = document.getElementById('log-toggle');
+  if (!panel) return;
+  const isOpen = panel.style.height !== '0px' && panel.style.height !== '0' && panel.style.height !== '';
+  if (isOpen) {
+    panel.style.height = '0';
+    if (toggle) toggle.textContent = '📋 日志';
+  } else {
+    panel.style.height = '180px';
+    if (toggle) toggle.textContent = '📋 收起';
+  }
+};
+
+window.clearLogPanel = function() {
+  const el = document.getElementById('log-content');
+  if (el) el.innerHTML = '';
+};
+
+// 重写 addAssistantLog 也输出到底部日志
+const _origLog = window.addAssistantLog;
+window.addAssistantLog = function(msg, type) {
+  if (_origLog) _origLog(msg, type);
+  window.logToPanel(msg, type || 'info');
+};
 
 // ================================================================
 // 初始化

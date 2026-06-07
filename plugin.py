@@ -403,7 +403,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         builder.ensure_default_pages()
 
         # 初始化工作区管理器
-        ws_config_path = os.path.join(plugin_dir, "web", "workspaces.json")
+        ws_config_path = os.path.join(plugin_dir, "data", "workspaces.json")
         self._workspace_manager = WorkspaceManager(ws_config_path, default_workspace_dir=self._workspace_dir)
 
         # 动态读取麦麦人设，提取风格关键词
