@@ -64,6 +64,7 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
 
     # 工作区 API
     app.router.add_get("/api/workspaces", lambda r: _handle_workspaces_list(r, plugin))
+    app.router.add_get("/api/workspaces/{name}", lambda r: _handle_workspaces_detail(r, plugin))
     app.router.add_post("/api/workspaces", lambda r: _handle_workspaces_save(r, plugin))
     app.router.add_delete("/api/workspaces/{name}", lambda r: _handle_workspaces_delete(r, plugin))
     app.router.add_post("/api/workspaces/{name}/activate", lambda r: _handle_workspaces_activate(r, plugin))
@@ -517,6 +518,18 @@ async def _handle_workspaces_list(request: web.Request, plugin: "MaiStudyCodePlu
         "workspaces": mgr.list_workspaces(),
         "active": mgr.get_active(),
     })
+
+
+async def _handle_workspaces_detail(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """获取单个工作区详情。"""
+    mgr = plugin._workspace_manager
+    if mgr is None:
+        return web.json_response({"error": "工作区管理器未初始化"}, status=500)
+    name = request.match_info.get("name", "")
+    ws = mgr.get_workspace(name)
+    if ws is None:
+        return web.json_response({"error": "工作区不存在"}, status=404)
+    return web.json_response(ws.to_dict())
 
 
 async def _handle_workspaces_save(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:

@@ -411,8 +411,9 @@ def create_workspace(config: Dict[str, Any]) -> Workspace:
 class WorkspaceManager:
     """工作区管理器，管理多个工作区的配置和生命周期。"""
 
-    def __init__(self, config_path: str) -> None:
+    def __init__(self, config_path: str, default_workspace_dir: str = "") -> None:
         self._config_path = config_path
+        self._default_workspace_dir = default_workspace_dir or os.path.expanduser("~a1")
         self._workspaces: Dict[str, Workspace] = {}
         self._active: str = ""
         self._load_config()
@@ -420,14 +421,12 @@ class WorkspaceManager:
     def _load_config(self) -> None:
         """从 JSON 文件加载工作区配置。"""
         if not os.path.isfile(self._config_path):
-            # 默认配置：沙箱 + root
-            a1_home = os.path.expanduser("~a1")
-            sandbox_path = a1_home if os.path.isdir(a1_home) else "/home/a1"
+            # 默认配置：沙箱工作台 + root
             defaults = [
                 {
-                    "name": "沙箱工作区",
+                    "name": "沙箱工作台",
                     "type": "local-sandbox",
-                    "path": sandbox_path,
+                    "path": self._default_workspace_dir,
                 },
                 {
                     "name": "本地 Root",

@@ -1,14 +1,19 @@
 {
-  "active": "沙箱工作区",
+  "active": "本地 Root",
   "workspaces": [
     {
-      "name": "沙箱工作区",
+      "name": "沙箱工作台",
       "type": "local-sandbox",
-      "path": "/home/a1"
+      "path": "/main/app/MaiM/MaiM-with-u22-Archangel_Deep/MaiBot/plugins/mai_study_code/workspace"
     },
     {
       "name": "本地 Root",
       "type": "local-root"
+    },
+    {
+      "name": "127github",
+      "type": "local-root",
+      "path": "/main/app/github"
     }
   ]
 }

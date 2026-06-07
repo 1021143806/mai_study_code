@@ -168,7 +168,7 @@ setInterval(updateClock, 1000);
 // ================================================================
 
 createEditor();
-loadFileTree();
 connectSSE();
 updateClock();
-loadWorkspaces();
+// 先加载工作区，再加载文件树（工作区决定目录）
+loadWorkspaces().then(() => loadFileTree());

@@ -17,19 +17,40 @@ export async function loadFileTree() {
   try {
     const ws = window.__activeWorkspace || '';
     const wsParam = ws ? `?workspace=${encodeURIComponent(ws)}` : '';
-    const resp = await fetch('/api/files' + wsParam);
-    const data = await resp.json();
+    const [filesResp, wsResp] = await Promise.all([
+      fetch('/api/files' + wsParam),
+      fetch(`/api/workspaces/${encodeURIComponent(ws)}`).catch(() => null),
+    ]);
+    const data = await filesResp.json();
     fileTreeData = data.tree || [];
     const root = document.getElementById('file-tree');
     if (!root) return;
     const wsName = ws || '工作区';
+    // 解析工作区路径
+    let wsPath = '';
+    if (wsResp && wsResp.ok) {
+      const wsData = await wsResp.json();
+      wsPath = wsData.path || '';
+    }
     root.innerHTML = `<div class="tree-item" style="--indent:0" onclick="toggleWsRoot(this)">
       <span class="tree-chevron" style="font-size:9px;width:14px;text-align:center;flex-shrink:0;opacity:0.4">▶</span>
       <span class="tree-icon">${icon('folder')}</span>
       <span>${escHtml(wsName)}</span>
     </div>
-    <div id="ws-root-children" style="display:none"></div>`;
+    <div id="ws-root-children" style="display:none"></div>
+    <div style="padding:2px 20px;font-size:10px;color:var(--text-muted);line-height:1.5">
+      ${wsPath ? `📍 ${friendlyPath(wsPath)}` : ''}
+    </div>`;
   } catch (e) { document.getElementById('file-tree').innerHTML = '加载失败'; }
+}
+
+function friendlyPath(p) {
+  // 友好的路径显示
+  if (p.includes('MaiBot/plugins/mai_study_code/workspace')) {
+    return '插件内部目录 <code style="font-size:10px;background:var(--glass-hover);padding:1px 4px;border-radius:3px">workspace/</code>';
+  }
+  if (p === '/') return '系统根目录 <code style="font-size:10px;background:var(--glass-hover);padding:1px 4px;border-radius:3px">/</code>';
+  return p;
 }
 
 export function toggleWsRoot(el) {

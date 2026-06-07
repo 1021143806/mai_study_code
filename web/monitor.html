@@ -21,12 +21,11 @@
 <!-- 顶部栏 -->
 <nav id="topbar">
   <a href="/" class="brand"><span class="sf"><svg viewBox="0 0 24 24"><polyline points="4 7 10 12 4 17"/><line x1="13" y1="17" x2="20" y2="17"/></svg></span> 麦麦学代码</a>
-  <div class="nav-tabs">
-    <div class="nav-tab active" data-page="editor" onclick="switchPage('editor')">工作区</div>
+  <div class="nav-tabs" id="nav-tabs">
+    <!-- 工作区标签由 JS 动态渲染 -->
     <div class="nav-tab" data-page="monitor" onclick="switchPage('monitor')">监控</div>
     <div class="nav-tab" data-page="pages" onclick="switchPage('pages')">我的页面</div>
   </div>
-  <div class="ws-tabs" id="ws-tabs"></div>
   <div class="right">
     <button class="ws-gear-btn" onclick="showWsDialog()" title="工作区设置"><span class="sf"><svg viewBox="0 0 24 24"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.65 1.65 0 0 0 .33 1.82l.06.06a2 2 0 0 1-2.83 2.83l-.06-.06a1.65 1.65 0 0 0-1.82-.33 1.65 1.65 0 0 0-1 1.51V21a2 2 0 0 1-4 0v-.09A1.65 1.65 0 0 0 9 19.4a1.65 1.65 0 0 0-1.82.33l-.06.06a2 2 0 0 1-2.83-2.83l.06-.06A1.65 1.65 0 0 0 4.68 15a1.65 1.65 0 0 0-1.51-1H3a2 2 0 0 1 0-4h.09A1.65 1.65 0 0 0 4.6 9a1.65 1.65 0 0 0-.33-1.82l-.06-.06a2 2 0 0 1 2.83-2.83l.06.06A1.65 1.65 0 0 0 9 4.68a1.65 1.65 0 0 0 1-1.51V3a2 2 0 0 1 4 0v.09a1.65 1.65 0 0 0 1 1.51 1.65 1.65 0 0 0 1.82-.33l.06-.06a2 2 0 0 1 2.83 2.83l-.06.06A1.65 1.65 0 0 0 19.4 9a1.65 1.65 0 0 0 1.51 1H21a2 2 0 0 1 0 4h-.09a1.65 1.65 0 0 0-1.51 1z"/></svg></span></button>
     <button class="reload-btn" id="reload-btn" onclick="reloadPlugin()" title="重新加载插件"><span class="sf"><svg viewBox="0 0 24 24"><polyline points="23 4 23 10 17 10"/><path d="M20.49 15a9 9 0 1 1-2.12-9.36L23 10"/></svg></span></button>
