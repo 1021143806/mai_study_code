@@ -244,7 +244,8 @@ class LocalRootWorkspace(LocalSandboxWorkspace):
 
     def __init__(self, config: Dict[str, Any]) -> None:
         super().__init__(config)
-        self.root = "/"
+        # 优先使用配置中的 path，默认为 /
+        self.root = config.get("path", "/")
         self._su_password: str = config.get("password", "")
 
     def _su_cmd(self, cmd: str) -> str:
@@ -256,10 +257,10 @@ class LocalRootWorkspace(LocalSandboxWorkspace):
 
     def _resolve(self, path: str) -> str:
         if not path or path == ".":
-            return "/"
+            return self.root
         if path.startswith("/"):
             return os.path.realpath(path)
-        return os.path.realpath("/" + path)
+        return os.path.realpath(os.path.join(self.root, path))
 
     def execute(self, command: str, timeout: int = 30) -> Dict[str, Any]:
         start = time.monotonic()

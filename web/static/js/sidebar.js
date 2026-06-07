@@ -68,6 +68,25 @@ export function toggleWsRoot(el) {
   }
 }
 
+/** 懒加载指定目录的子节点 */
+async function loadChildrenForNode(node, container, indent, onLoaded) {
+  try {
+    const ws = window.__activeWorkspace || '';
+    const wsQ = ws ? `&workspace=${encodeURIComponent(ws)}` : '';
+    const resp = await fetch(`/api/files?dir=${encodeURIComponent(node.path)}${wsQ}`);
+    const data = await resp.json();
+    const subtree = data.tree || [];
+    // 保存子节点到原 node 上，方便后续操作
+    node.children = subtree;
+    container.innerHTML = '';
+    renderFileTree(subtree, container, indent);
+    if (onLoaded) onLoaded();
+  } catch (e) {
+    container.innerHTML = '<div class="tree-item" style="--indent:' + (indent * 12) + 'px;color:var(--text-muted)">加载失败</div>';
+    if (onLoaded) onLoaded();
+  }
+}
+
 function renderFileTree(tree, container, indent) {
   if (!indent) { indent = 0; container.innerHTML = ''; }
   tree.forEach(node => {
@@ -82,17 +101,36 @@ function renderFileTree(tree, container, indent) {
       const chevronEl = div.querySelector('.tree-chevron');
       const childrenContainer = document.createElement('div');
       childrenContainer.style.display = 'none';
+      let hasLoadedChildren = false;
       div.onclick = (e) => {
         if (e.target === chevronEl || (e.target.classList && e.target.classList.contains('tree-chevron'))) {
           const isOpen = childrenContainer.style.display !== 'none';
-          childrenContainer.style.display = isOpen ? 'none' : '';
-          if (chevronEl) chevronEl.classList.toggle('open', !isOpen);
+          if (isOpen) {
+            childrenContainer.style.display = 'none';
+            if (chevronEl) chevronEl.classList.remove('open');
+          } else {
+            // 如果还未加载子节点数据，向后端请求
+            if (!hasLoadedChildren) {
+              loadChildrenForNode(node, childrenContainer, indent + 1, () => {
+                hasLoadedChildren = true;
+                childrenContainer.style.display = '';
+                if (chevronEl) chevronEl.classList.add('open');
+              });
+            } else {
+              childrenContainer.style.display = '';
+              if (chevronEl) chevronEl.classList.add('open');
+            }
+          }
         } else {
           document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
           div.classList.add('selected');
         }
       };
-      renderFileTree(node.children || [], childrenContainer, indent + 1);
+      // 仅在已预加载子节点时才直接渲染
+      if (node.children && node.children.length > 0) {
+        renderFileTree(node.children, childrenContainer, indent + 1);
+        hasLoadedChildren = true;
+      }
       container.appendChild(div);
       container.appendChild(childrenContainer);
     } else {
