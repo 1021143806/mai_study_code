@@ -27,7 +27,8 @@
     "send.text",
     "send.hybrid",
     "config.get",
-    "chat.open_session"
+    "chat.open_session",
+    "llm.generate"
   ],
   "i18n": {
     "default_locale": "zh-CN",

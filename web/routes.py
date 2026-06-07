@@ -60,9 +60,12 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_post("/api/file/write", lambda r: _handle_file_write(r, plugin))
     app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
     app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
+    app.router.add_post("/api/chat", lambda r: _handle_chat(r, plugin))
 
-    # 静态文件
+    # 静态文件 & CDN 代理
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
+    # 代理 jsDelivr /npm/ 路径，用于本地化 CodeMirror ESM 依赖
+    app.router.add_get("/npm/{path:.+}", lambda r: _handle_npm_proxy(r))
 
 
 # ============================================================
@@ -397,6 +400,62 @@ async def _handle_reload(request: web.Request, plugin: "MaiStudyCodePlugin") -> 
         return web.json_response({"success": False, "error": str(e)}, status=500)
 
 
+async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """Claude Code 风格对话。
+
+    Body (JSON):
+        messages: 消息列表 [{role, content}, ...]
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+
+    messages = body.get("messages", [])
+    if not messages or not isinstance(messages, list):
+        return web.json_response({"error": "缺少 messages 或格式错误"}, status=400)
+
+    # 系统提示
+    system_prompt = (
+        "你是一个智能编程助手，运行在沙箱环境中。"
+        "你可以帮助用户编写代码、调试、回答问题。"
+        "当用户要求执行代码时，直接输出代码，用户会自动复制或运行。"
+        "保持回答简洁、准确。"
+    )
+
+    try:
+        # 组装对话文本
+        dialog = []
+        for m in messages:
+            role = m.get("role", "user")
+            content = m.get("content", "")
+            if role == "system":
+                dialog.append(f"系统: {content}")
+            elif role == "user":
+                dialog.append(f"用户: {content}")
+            elif role == "assistant":
+                dialog.append(f"助手: {content}")
+        dialog_text = "\n".join(dialog)
+
+        result = await plugin.ctx.llm.generate(
+            f"{system_prompt}\n\n对话历史:\n{dialog_text}\n\n助手:",
+            model="replyer",
+        )
+        response_text = result.get("response", "") or result.get("content", "")
+        model = result.get("model", "")
+        error = result.get("error", "")
+        if not response_text and error:
+            return web.json_response({"success": False, "error": error})
+        return web.json_response({
+            "success": True,
+            "response": response_text,
+            "model": model,
+        })
+    except Exception as e:
+        logger.error(f"对话生成失败: {e}")
+        return web.json_response({"success": False, "error": str(e)}, status=500)
+
+
 async def _handle_static_theme(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
     """静态主题 CSS 文件。"""
     theme_path = os.path.join(plugin._workspace_dir, "web", "theme.css")
@@ -439,6 +498,49 @@ def _load_monitor_html(plugin: "MaiStudyCodePlugin") -> str:
 
     # 最终降级
     return _fallback_monitor_html()
+
+
+_NPM_CACHE_DIR = os.path.join(os.path.dirname(__file__), ".npm_cache")
+
+
+async def _handle_npm_proxy(request: web.Request) -> web.Response:
+    """代理 jsDelivr /npm/ 路径（带本地磁盘缓存）。
+
+    首次请求从 CDN 拉取并缓存到本地，后续直接从缓存响应，
+    断网也能正常工作。
+    """
+    path = request.match_info.get("path", "")
+    # 本地缓存路径
+    cache_path = os.path.join(_NPM_CACHE_DIR, path.replace("/", "_").replace("@", "_"))
+    # 尝试从缓存读取
+    if os.path.isfile(cache_path):
+        with open(cache_path, "rb") as f:
+            body = f.read()
+        ct = "application/javascript"
+        if path.endswith(".css"):
+            ct = "text/css"
+        elif path.endswith(".map"):
+            ct = "application/json"
+        return web.Response(body=body, content_type=ct)
+
+    # 缓存未命中，从 CDN 拉取
+    url = f"https://cdn.jsdelivr.net/npm/{path}"
+    try:
+        import aiohttp as _aiohttp
+        async with _aiohttp.ClientSession() as session:
+            async with session.get(url, timeout=_aiohttp.ClientTimeout(total=30)) as resp:
+                if resp.status != 200:
+                    return web.Response(status=resp.status, text=f"CDN 返回 {resp.status}")
+                body = await resp.read()
+                # 写入缓存
+                os.makedirs(os.path.dirname(cache_path), exist_ok=True)
+                with open(cache_path, "wb") as f:
+                    f.write(body)
+                ct = resp.content_type or "application/javascript"
+                return web.Response(body=body, content_type=ct)
+    except Exception as e:
+        logger.error(f"CDN 代理失败 [{path}]: {e}")
+        return web.Response(status=502, text=f"CDN 代理失败: {e}")
 
 
 def _fallback_monitor_html() -> str:
