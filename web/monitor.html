@@ -1,280 +1,1627 @@
 <!DOCTYPE html>
 <html lang="zh-CN">
 <head>
-    <meta charset="UTF-8">
-    <meta name="viewport" content="width=device-width, initial-scale=1.0">
-    <title>麦麦学代码 — 实时监控</title>
-    <link rel="stylesheet" href="/static/theme.css">
-    <style>
-        * { margin: 0; padding: 0; box-sizing: border-box; }
-        body {
-            font-family: var(--font-mono);
-            background: var(--bg-primary);
-            color: var(--text-primary);
-            padding: var(--spacing-md);
-            min-height: 100vh;
-        }
-        /* 导航栏 */
-        .nav-bar {
-            display: flex;
-            align-items: center;
-            gap: var(--spacing-md);
-            padding: var(--spacing-sm) var(--spacing-md);
-            background: var(--bg-card);
-            border-radius: var(--border-radius);
-            margin-bottom: var(--spacing-md);
-            box-shadow: var(--shadow-card);
-        }
-        .nav-brand { font-weight: bold; color: var(--color-info); text-decoration: none; font-size: 1rem; }
-        .nav-links { display: flex; gap: var(--spacing-sm); align-items: center; }
-        .nav-link { color: var(--text-secondary); text-decoration: none; padding: var(--spacing-xs) var(--spacing-sm); border-radius: 4px; font-size: 0.85rem; cursor: pointer; }
-        .nav-link:hover, .nav-link.active { color: var(--text-primary); background: var(--accent); }
-        .nav-dropdown { position: relative; }
-        .dropdown-menu {
-            display: none;
-            position: absolute;
-            top: 100%;
-            left: 0;
-            background: var(--bg-card);
-            border: 1px solid var(--border-color);
-            border-radius: var(--border-radius);
-            min-width: 160px;
-            z-index: 100;
-            box-shadow: var(--shadow-card);
-        }
-        .nav-dropdown:hover .dropdown-menu { display: block; }
-        .dropdown-menu a {
-            display: block;
-            padding: var(--spacing-xs) var(--spacing-sm);
-            color: var(--text-primary);
-            text-decoration: none;
-            font-size: 0.8rem;
-        }
-        .dropdown-menu a:hover { background: var(--accent); }
-        .nav-port { margin-left: auto; color: var(--text-muted); font-size: 0.8rem; }
-        /* 网格 */
-        .grid {
-            display: grid;
-            grid-template-columns: repeat(3, 1fr);
-            gap: var(--spacing-md);
-            margin-bottom: var(--spacing-md);
-        }
-        @media (max-width: 768px) { .grid { grid-template-columns: 1fr; } }
-        .card {
-            background: var(--bg-card);
-            border-radius: var(--border-radius);
-            padding: var(--spacing-md);
-            box-shadow: var(--shadow-card);
-        }
-        .card h3 {
-            font-size: 0.8rem;
-            color: var(--text-secondary);
-            margin-bottom: var(--spacing-sm);
-            text-transform: uppercase;
-            letter-spacing: 1px;
-        }
-        .stat-row {
-            display: flex;
-            justify-content: space-between;
-            padding: 0.2rem 0;
-            font-size: 0.78rem;
-        }
-        .stat-value { color: var(--color-success); }
-        .stat-value.warn { color: var(--color-warning); }
-        .stat-value.danger { color: var(--color-danger); }
-        /* 进度条 */
-        .progress-bar {
-            height: 6px;
-            background: #333;
-            border-radius: 3px;
-            margin-top: var(--spacing-sm);
-            overflow: hidden;
-        }
-        .progress-fill {
-            height: 100%;
-            background: var(--color-success);
-            border-radius: 3px;
-            transition: width 0.5s, background 0.5s;
-        }
-        /* 日志 */
-        .log-container {
-            background: var(--bg-card);
-            border-radius: var(--border-radius);
-            padding: var(--spacing-md);
-            max-height: 300px;
-            overflow-y: auto;
-            box-shadow: var(--shadow-card);
-        }
-        .log-entry {
-            font-size: 0.72rem;
-            padding: 0.15rem 0;
-            border-bottom: 1px solid var(--border-color);
-            font-family: var(--font-mono);
-        }
-        .log-time { color: var(--text-muted); }
-        .log-type { color: var(--color-info); }
-        .log-ok { color: var(--color-success); }
-        .log-err { color: var(--color-danger); }
-        .log-warn { color: var(--color-warning); }
-        /* 连接状态 */
-        .conn-status {
-            display: inline-block;
-            width: 8px;
-            height: 8px;
-            border-radius: 50%;
-            margin-right: 4px;
-        }
-        .conn-status.online { background: var(--color-success); }
-        .conn-status.offline { background: var(--color-danger); }
-    </style>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>麦麦学代码 — 守护者控制台</title>
+<script type="importmap">
+{
+  "imports": {
+    "codemirror": "https://cdn.jsdelivr.net/npm/codemirror@6.0.2/+esm",
+    "codemirror/state": "https://cdn.jsdelivr.net/npm/@codemirror/state@6.5.0/+esm",
+    "codemirror/lang-python": "https://cdn.jsdelivr.net/npm/@codemirror/lang-python@6.1.6/+esm",
+    "codemirror/theme-one-dark": "https://cdn.jsdelivr.net/npm/@codemirror/theme-one-dark@6.1.2/+esm",
+    "codemirror/basic-setup": "https://cdn.jsdelivr.net/npm/@codemirror/basic-setup@0.20.0/+esm",
+    "codemirror/commands": "https://cdn.jsdelivr.net/npm/@codemirror/commands@6.7.1/+esm",
+    "codemirror/search": "https://cdn.jsdelivr.net/npm/@codemirror/search@6.5.8/+esm",
+    "codemirror/autocomplete": "https://cdn.jsdelivr.net/npm/@codemirror/autocomplete@6.18.4/+esm",
+    "codemirror/language": "https://cdn.jsdelivr.net/npm/@codemirror/language@6.10.8/+esm",
+    "codemirror/lint": "https://cdn.jsdelivr.net/npm/@codemirror/lint@6.8.4/+esm"
+  }
+}
+</script>
+<style>
+/* ================================================================
+   GLASS × Arc — 麦麦学代码守护者控制台 v2
+   设计语言：多层毛玻璃叠加 + 动态彩色光晕背景 + Arc 圆角体系
+   ================================================================ */
+
+/* --- Layer 0: CSS 动画变量 --- */
+@property --glow-hue {
+  syntax: '<angle>';
+  initial-value: 240deg;
+  inherits: false;
+}
+@property --glow-x {
+  syntax: '<percentage>';
+  initial-value: 30%;
+  inherits: false;
+}
+@property --glow-y {
+  syntax: '<percentage>';
+  initial-value: 40%;
+  inherits: false;
+}
+
+/* --- Layer 1: CSS 变量（玻璃光晕色板） --- */
+:root {
+  --glass-base: #0d0d1a;
+  --glass-deep: rgba(13, 13, 28, 0.92);
+  --glass-mid: rgba(22, 22, 44, 0.78);
+  --glass-light: rgba(28, 28, 52, 0.62);
+  --glass-sheet: rgba(18, 18, 36, 0.85);
+  --glass-pop: rgba(32, 32, 58, 0.72);
+
+  --glow-blue: #6c72cb;
+  --glow-purple: #8b5cf6;
+  --glow-cyan: #22d3ee;
+  --glow-pink: #e879a0;
+  --glow-amber: #f59e0b;
+
+  --aura-blue: rgba(108, 114, 203, 0.12);
+  --aura-purple: rgba(139, 92, 246, 0.10);
+  --aura-cyan: rgba(34, 211, 238, 0.08);
+
+  --border-glass: rgba(255, 255, 255, 0.06);
+  --border-glass-strong: rgba(255, 255, 255, 0.10);
+  --border-glass-hover: rgba(255, 255, 255, 0.15);
+
+  --text-primary: rgba(240, 240, 250, 0.92);
+  --text-secondary: rgba(200, 200, 220, 0.65);
+  --text-muted: rgba(160, 160, 180, 0.42);
+  --text-accent: #a5b4fc;
+
+  --accent: #818cf8;
+  --accent-glow: rgba(129, 140, 248, 0.35);
+  --success: #34d399;
+  --warning: #fbbf24;
+  --danger: #f87171;
+  --info: #38bdf8;
+
+  --font-mono: 'JetBrains Mono', 'Fira Code', 'SF Mono', 'Menlo', monospace;
+  --font-sans: system-ui, -apple-system, 'SF Pro Text', 'Helvetica Neue', sans-serif;
+
+  --sidebar-width: 270px;
+  --assistant-width: 350px;
+  --topbar-height: 42px;
+  --statusbar-height: 26px;
+  --activitybar-width: 50px;
+
+  --radius-xs: 8px;
+  --radius-sm: 12px;
+  --radius-md: 16px;
+  --radius-lg: 20px;
+  --radius-xl: 24px;
+  --radius-full: 999px;
+
+  --shadow-card: 0 1px 1px rgba(0,0,0,0.4), 0 2px 8px rgba(0,0,0,0.3), 0 8px 32px rgba(0,0,0,0.25);
+  --shadow-float: 0 4px 16px rgba(0,0,0,0.45), 0 16px 48px rgba(0,0,0,0.35);
+  --shadow-glow: 0 0 30px rgba(129, 140, 248, 0.15), 0 0 80px rgba(108, 114, 203, 0.06);
+
+  --blur-topbar: 28px;
+  --blur-sidebar: 18px;
+  --blur-editor: 14px;
+  --blur-assistant: 18px;
+  --blur-card: 24px;
+  --blur-popup: 36px;
+
+  --ease-out-expo: cubic-bezier(0.16, 1, 0.3, 1);
+  --ease-spring: cubic-bezier(0.34, 1.56, 0.64, 1);
+  --duration-fast: 0.15s;
+  --duration-normal: 0.25s;
+  --duration-slow: 0.45s;
+  --duration-glacial: 20s;
+
+  --scrollbar-thumb: rgba(255,255,255,0.08);
+  --scrollbar-track: transparent;
+}
+
+@media (prefers-color-scheme: light) {
+  :root {
+    --glass-base: #f0f0f5;
+    --glass-deep: rgba(240, 240, 248, 0.94);
+    --glass-mid: rgba(250, 250, 255, 0.82);
+    --glass-light: rgba(255, 255, 255, 0.68);
+    --glass-sheet: rgba(245, 245, 250, 0.88);
+    --glass-pop: rgba(255, 255, 255, 0.78);
+
+    --text-primary: rgba(20, 20, 30, 0.92);
+    --text-secondary: rgba(60, 60, 80, 0.65);
+    --text-muted: rgba(100, 100, 120, 0.45);
+    --text-accent: #6366f1;
+
+    --border-glass: rgba(0,0,0,0.06);
+    --border-glass-strong: rgba(0,0,0,0.10);
+    --aura-blue: rgba(99, 102, 241, 0.06);
+    --aura-purple: rgba(139, 92, 246, 0.05);
+    --scrollbar-thumb: rgba(0,0,0,0.10);
+
+    --shadow-card: 0 1px 1px rgba(0,0,0,0.06), 0 2px 8px rgba(0,0,0,0.08), 0 8px 32px rgba(0,0,0,0.06);
+    --shadow-float: 0 4px 16px rgba(0,0,0,0.10), 0 16px 48px rgba(0,0,0,0.08);
+  }
+}
+
+/* --- Layer 1: 光晕背景层 --- */
+body::before {
+  content: '';
+  position: fixed;
+  inset: 0;
+  z-index: 0;
+  pointer-events: none;
+  background:
+    radial-gradient(ellipse 80% 70% at var(--glow-x) var(--glow-y),
+      var(--aura-purple) 0%, transparent 60%),
+    radial-gradient(ellipse 60% 60% at 70% 30%,
+      var(--aura-blue) 0%, transparent 55%),
+    radial-gradient(ellipse 50% 50% at 20% 80%,
+      var(--aura-cyan) 0%, transparent 50%);
+  animation:
+    glowDrift var(--duration-glacial) ease-in-out infinite alternate,
+    glowPulse 12s ease-in-out infinite;
+}
+@keyframes glowDrift {
+  0% { --glow-x: 25%; --glow-y: 35%; }
+  100% { --glow-x: 60%; --glow-y: 55%; }
+}
+@keyframes glowPulse {
+  0%, 100% { opacity: 0.7; }
+  50% { opacity: 1; }
+}
+
+/* --- Layer 2: 全局重置 --- */
+*, *::before, *::after { margin: 0; padding: 0; box-sizing: border-box; }
+html, body { height: 100%; overflow: hidden; }
+body {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  background: var(--glass-base);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+  display: flex;
+  flex-direction: column;
+  position: relative;
+  z-index: 1;
+}
+::-webkit-scrollbar { width: 6px; height: 6px; }
+::-webkit-scrollbar-track { background: var(--scrollbar-track); }
+::-webkit-scrollbar-thumb { background: var(--scrollbar-thumb); border-radius: 3px; }
+::-webkit-scrollbar-thumb:hover { background: rgba(255,255,255,0.14); }
+
+/* --- 按钮基础 --- */
+button {
+  cursor: pointer;
+  background: var(--accent);
+  color: #fff;
+  border: none;
+  padding: 7px 16px;
+  border-radius: var(--radius-xs);
+  font-weight: 600;
+  font-size: 12px;
+  font-family: var(--font-sans);
+  letter-spacing: 0.01em;
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  box-shadow: 0 0 0 0 var(--accent-glow);
+  position: relative;
+}
+button:hover {
+  background: #a5b4fc;
+  box-shadow: 0 0 16px 2px var(--accent-glow);
+  transform: translateY(-1px);
+}
+button:active { transform: scale(0.97); }
+button.secondary {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-secondary);
+  border: 1px solid var(--border-glass);
+  box-shadow: none;
+}
+button.secondary:hover {
+  background: rgba(255,255,255,0.10);
+  color: var(--text-primary);
+  box-shadow: 0 0 12px rgba(255,255,255,0.04);
+}
+button.danger { background: var(--danger); }
+button.danger:hover { background: #fca5a5; box-shadow: 0 0 16px 2px rgba(248,113,113,0.3); }
+input, textarea, select {
+  font-family: var(--font-sans);
+  font-size: 13px;
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-xs);
+  padding: 7px 12px;
+  outline: none;
+  transition: border-color var(--duration-fast), box-shadow var(--duration-fast);
+}
+input:focus, textarea:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--aura-blue);
+}
+
+/* ================================================================
+   Layer 3: 顶部导航栏（深度毛玻璃悬浮条）
+   ================================================================ */
+#topbar {
+  height: var(--topbar-height);
+  display: flex;
+  align-items: center;
+  background: var(--glass-deep);
+  backdrop-filter: blur(var(--blur-topbar)) saturate(1.4);
+  -webkit-backdrop-filter: blur(var(--blur-topbar)) saturate(1.4);
+  border-bottom: 1px solid var(--border-glass-strong);
+  padding: 0 14px;
+  gap: 10px;
+  z-index: 200;
+  flex-shrink: 0;
+  position: relative;
+}
+#topbar .brand {
+  font-weight: 700;
+  font-size: 13px;
+  color: var(--text-primary);
+  text-decoration: none;
+  user-select: none;
+  letter-spacing: -0.01em;
+}
+#topbar .traffic-lights {
+  display: flex;
+  gap: 7px;
+  margin-right: 6px;
+  align-items: center;
+}
+#topbar .traffic-light {
+  width: 12px;
+  height: 12px;
+  border-radius: var(--radius-full);
+  transition: all var(--duration-normal) var(--ease-spring);
+  box-shadow: inset 0 0 0 0.5px rgba(0,0,0,0.2);
+}
+#topbar .traffic-light:hover { transform: scale(1.2); opacity: 0.85; }
+#topbar .tl-red { background: #ff5f57; }
+#topbar .tl-yellow { background: #febc2e; }
+#topbar .tl-green { background: #28c840; }
+#topbar .nav-tabs {
+  display: flex;
+  gap: 2px;
+  margin-left: 20px;
+  height: 100%;
+  align-items: stretch;
+}
+#topbar .nav-tab {
+  padding: 0 18px;
+  height: 100%;
+  display: flex;
+  align-items: center;
+  font-size: 12.5px;
+  font-weight: 500;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  position: relative;
+  letter-spacing: -0.01em;
+}
+#topbar .nav-tab:hover {
+  color: var(--text-primary);
+  background: rgba(255,255,255,0.04);
+}
+#topbar .nav-tab.active {
+  color: var(--text-primary);
+  background: rgba(129,140,248,0.1);
+}
+#topbar .nav-tab.active::after {
+  content: '';
+  position: absolute;
+  bottom: 0; left: 8px; right: 8px;
+  height: 2px;
+  background: var(--accent);
+  border-radius: 2px 2px 0 0;
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+#topbar .conn-indicator {
+  margin-left: auto;
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  font-size: 11px;
+  color: var(--text-muted);
+  background: rgba(255,255,255,0.03);
+  padding: 4px 10px;
+  border-radius: var(--radius-full);
+  border: 1px solid var(--border-glass);
+}
+#topbar .conn-dot {
+  width: 7px;
+  height: 7px;
+  border-radius: var(--radius-full);
+  background: var(--success);
+  transition: background var(--duration-normal);
+  box-shadow: 0 0 6px rgba(52,211,153,0.5);
+}
+#topbar .conn-dot.offline { background: var(--danger); box-shadow: 0 0 6px rgba(248,113,113,0.5); }
+
+/* ================================================================
+   Layer 3: 主工作区
+   ================================================================ */
+#workspace {
+  flex: 1;
+  display: flex;
+  overflow: hidden;
+  position: relative;
+}
+
+/* --- 活动栏 (Arc 风格彩色渐变) --- */
+#activitybar {
+  width: var(--activitybar-width);
+  background: var(--glass-mid);
+  backdrop-filter: blur(var(--blur-sidebar));
+  -webkit-backdrop-filter: blur(var(--blur-sidebar));
+  border-right: 1px solid var(--border-glass);
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 10px 0;
+  gap: 4px;
+  flex-shrink: 0;
+  z-index: 15;
+}
+#activitybar .activity-btn {
+  width: 38px;
+  height: 38px;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 17px;
+  border-radius: var(--radius-sm);
+  cursor: pointer;
+  color: var(--text-muted);
+  transition: all var(--duration-normal) var(--ease-spring);
+  position: relative;
+}
+#activitybar .activity-btn::before {
+  content: '';
+  position: absolute;
+  inset: 4px;
+  border-radius: var(--radius-sm);
+  background: transparent;
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  z-index: -1;
+}
+#activitybar .activity-btn:hover {
+  color: var(--text-primary);
+  transform: scale(1.08);
+}
+#activitybar .activity-btn:hover::before {
+  background: rgba(255,255,255,0.06);
+  inset: 0;
+}
+#activitybar .activity-btn.active {
+  color: var(--text-accent);
+}
+#activitybar .activity-btn.active::before {
+  background: linear-gradient(135deg, rgba(129,140,248,0.18), rgba(108,114,203,0.08));
+  inset: 0;
+}
+#activitybar .activity-btn.active::after {
+  content: '';
+  position: absolute;
+  left: 0;
+  top: 6px;
+  bottom: 6px;
+  width: 2.5px;
+  background: var(--accent);
+  border-radius: 0 3px 3px 0;
+  box-shadow: 0 0 8px var(--accent-glow);
+}
+
+/* --- 侧边栏 (Arc 圆角悬浮) --- */
+#sidebar {
+  width: var(--sidebar-width);
+  background: var(--glass-sheet);
+  backdrop-filter: blur(var(--blur-sidebar));
+  -webkit-backdrop-filter: blur(var(--blur-sidebar));
+  border-right: 1px solid var(--border-glass);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: width var(--duration-slow) var(--ease-out-expo);
+  border-radius: 0 var(--radius-lg) var(--radius-lg) 0;
+  margin: 8px 0;
+}
+#sidebar.collapsed { width: 0; border-radius: 0; margin: 0; }
+#sidebar .sidebar-header {
+  padding: 10px 14px;
+  font-size: 11px;
+  font-weight: 700;
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  color: var(--text-muted);
+  border-bottom: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+#sidebar .sidebar-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 6px 0;
+}
+.sidebar-section { padding: 4px 0; }
+.sidebar-section-title {
+  padding: 6px 16px;
+  font-size: 11px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  user-select: none;
+}
+.tree-item {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  padding: 4px 16px;
+  padding-left: calc(16px + var(--indent, 0) * 16px);
+  font-size: 12.5px;
+  color: var(--text-secondary);
+  cursor: pointer;
+  user-select: none;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  border-radius: 0 var(--radius-xs) var(--radius-xs) 0;
+  margin: 1px 8px 1px 0;
+}
+.tree-item:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--text-primary);
+}
+.tree-item.selected {
+  background: rgba(129,140,248,0.12);
+  color: var(--text-accent);
+}
+.tree-item .tree-icon { font-size: 14px; width: 16px; text-align: center; flex-shrink: 0; }
+.tree-item .tree-chevron {
+  font-size: 9px;
+  width: 16px;
+  text-align: center;
+  flex-shrink: 0;
+  transition: transform var(--duration-fast) var(--ease-spring);
+  cursor: pointer;
+  opacity: 0.5;
+}
+.tree-item .tree-chevron.open { transform: rotate(90deg); opacity: 1; }
+
+/* --- 分隔线拖拽手柄（发光线） --- */
+.resize-handle {
+  width: 3px;
+  cursor: col-resize;
+  background: transparent;
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  flex-shrink: 0;
+  z-index: 30;
+  position: relative;
+}
+.resize-handle::after {
+  content: '';
+  position: absolute;
+  inset: 20% 1px;
+  border-radius: 2px;
+  background: transparent;
+  transition: background var(--duration-normal);
+}
+.resize-handle:hover::after, .resize-handle.dragging::after {
+  background: var(--accent);
+  box-shadow: 0 0 12px var(--accent-glow);
+}
+
+/* --- 中央编辑区（悬浮玻璃卡片） --- */
+#editor-panel {
+  flex: 1;
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  min-width: 200px;
+  margin: 8px;
+  background: var(--glass-mid);
+  backdrop-filter: blur(var(--blur-editor));
+  -webkit-backdrop-filter: blur(var(--blur-editor));
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-lg);
+  box-shadow: var(--shadow-card);
+  position: relative;
+}
+#editor-panel::before {
+  content: '';
+  position: absolute;
+  top: -1px; left: 20px; right: 20px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.08), transparent);
+  border-radius: 1px;
+  z-index: 5;
+  pointer-events: none;
+}
+#editor-tabs {
+  display: flex;
+  background: transparent;
+  overflow-x: auto;
+  flex-shrink: 0;
+  height: 34px;
+  padding: 0 8px;
+  gap: 1px;
+}
+#editor-tabs::-webkit-scrollbar { height: 0; }
+.editor-tab {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 14px;
+  font-size: 12px;
+  color: var(--text-muted);
+  cursor: pointer;
+  white-space: nowrap;
+  user-select: none;
+  transition: all var(--duration-fast) var(--ease-out-expo);
+  height: 100%;
+  border-radius: var(--radius-xs) var(--radius-xs) 0 0;
+  margin-top: 4px;
+}
+.editor-tab:hover {
+  background: rgba(255,255,255,0.04);
+  color: var(--text-secondary);
+}
+.editor-tab.active {
+  background: rgba(255,255,255,0.06);
+  color: var(--text-primary);
+}
+.editor-tab .tab-close {
+  font-size: 14px;
+  color: var(--text-muted);
+  border-radius: 4px;
+  padding: 0 3px;
+  transition: all var(--duration-fast);
+}
+.editor-tab .tab-close:hover { color: var(--danger); background: rgba(248,113,113,0.15); }
+#editor-container {
+  flex: 1;
+  overflow: hidden;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+#editor-container > div { height: 100%; }
+#editor-container .cm-editor { height: 100%; background: transparent !important; }
+#editor-container .cm-editor .cm-scroller { overflow: auto; font-family: var(--font-mono); }
+#editor-container .cm-editor .cm-content { font-family: var(--font-mono); font-size: 13.5px; line-height: 1.7; }
+#editor-container .cm-editor .cm-gutters {
+  background: transparent !important;
+  border-right: 1px solid var(--border-glass) !important;
+  color: var(--text-muted) !important;
+}
+.editor-toolbar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 6px 12px;
+  background: transparent;
+  border-top: 1px solid var(--border-glass);
+  flex-shrink: 0;
+  height: 36px;
+}
+.editor-toolbar .toolbar-btn {
+  padding: 3px 12px;
+  font-size: 11.5px;
+  border-radius: var(--radius-xs);
+}
+#editor-output {
+  background: rgba(0,0,0,0.2);
+  border-top: 1px solid var(--border-glass);
+  font-family: var(--font-mono);
+  font-size: 12px;
+  padding: 10px 14px;
+  max-height: 200px;
+  overflow-y: auto;
+  white-space: pre-wrap;
+  color: var(--text-secondary);
+  flex-shrink: 0;
+  border-radius: 0 0 var(--radius-lg) var(--radius-lg);
+}
+#editor-output.type-error { color: var(--danger); }
+
+/* --- 右侧麦麦助手面板（玻璃卡片堆叠） --- */
+#assistant-panel {
+  width: var(--assistant-width);
+  background: var(--glass-sheet);
+  backdrop-filter: blur(var(--blur-assistant));
+  -webkit-backdrop-filter: blur(var(--blur-assistant));
+  border-left: 1px solid var(--border-glass);
+  display: flex;
+  flex-direction: column;
+  overflow: hidden;
+  flex-shrink: 0;
+  transition: width var(--duration-slow) var(--ease-out-expo);
+  margin: 8px 8px 8px 0;
+  border-radius: var(--radius-lg);
+  border: 1px solid var(--border-glass);
+}
+#assistant-panel.collapsed { width: 0; margin: 8px 0; }
+#assistant-panel .assistant-header {
+  padding: 10px 14px;
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--text-secondary);
+  border-bottom: 1px solid var(--border-glass);
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  flex-shrink: 0;
+}
+#assistant-panel .assistant-content {
+  flex: 1;
+  overflow-y: auto;
+  padding: 10px;
+  display: flex;
+  flex-direction: column;
+  gap: 10px;
+}
+.assistant-card {
+  background: rgba(255,255,255,0.03);
+  backdrop-filter: blur(var(--blur-card));
+  -webkit-backdrop-filter: blur(var(--blur-card));
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-md);
+  padding: 12px 14px;
+  transition: all var(--duration-normal) var(--ease-out-expo);
+  position: relative;
+  overflow: hidden;
+}
+.assistant-card::before {
+  content: '';
+  position: absolute;
+  top: 0; left: 0; right: 0;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.06), transparent);
+}
+.assistant-card:hover {
+  background: rgba(255,255,255,0.05);
+  border-color: var(--border-glass-strong);
+}
+.assistant-card h4 {
+  font-size: 10.5px;
+  font-weight: 700;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.8px;
+  margin-bottom: 8px;
+}
+.assistant-stat {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  padding: 2.5px 0;
+  font-size: 12px;
+}
+.assistant-stat .stat-label { color: var(--text-secondary); }
+.assistant-stat .stat-value { font-weight: 600; }
+.assistant-stat .stat-value.good { color: var(--success); }
+.assistant-stat .stat-value.warn { color: var(--warning); }
+.assistant-stat .stat-value.danger { color: var(--danger); }
+.mini-progress {
+  height: 4px;
+  background: rgba(255,255,255,0.05);
+  border-radius: 2px;
+  margin: 5px 0;
+  overflow: hidden;
+}
+.mini-progress-fill {
+  height: 100%;
+  border-radius: 2px;
+  transition: width 0.6s var(--ease-out-expo), background 0.4s;
+  box-shadow: 0 0 8px currentColor;
+}
+#assistant-log {
+  flex: 1;
+  min-height: 80px;
+  max-height: 180px;
+  overflow-y: auto;
+  font-family: var(--font-mono);
+  font-size: 11px;
+  color: var(--text-secondary);
+  line-height: 1.6;
+}
+#assistant-log .log-line {
+  padding: 1.5px 0;
+  border-bottom: 1px solid var(--border-glass);
+}
+#assistant-log .log-time { color: var(--text-muted); margin-right: 8px; font-size: 10px; }
+#assistant-input-area {
+  flex-shrink: 0;
+  display: flex;
+  gap: 8px;
+  padding: 10px;
+  border-top: 1px solid var(--border-glass);
+}
+#assistant-input-area input {
+  flex: 1;
+  background: rgba(255,255,255,0.04);
+  border: 1px solid var(--border-glass);
+  border-radius: var(--radius-full);
+  padding: 8px 16px;
+  font-size: 12px;
+  transition: all var(--duration-normal);
+}
+#assistant-input-area input:focus {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px var(--aura-blue), 0 0 16px var(--accent-glow);
+}
+#assistant-input-area button {
+  border-radius: var(--radius-full);
+  width: 34px;
+  height: 34px;
+  padding: 0;
+  font-size: 15px;
+}
+
+/* ================================================================
+   Layer 3: 底部状态栏（玻璃条）
+   ================================================================ */
+#statusbar {
+  height: var(--statusbar-height);
+  display: flex;
+  align-items: center;
+  background: var(--glass-mid);
+  backdrop-filter: blur(var(--blur-topbar));
+  -webkit-backdrop-filter: blur(var(--blur-topbar));
+  border-top: 1px solid var(--border-glass-strong);
+  font-size: 11px;
+  padding: 0 14px;
+  gap: 14px;
+  flex-shrink: 0;
+  z-index: 200;
+  user-select: none;
+  color: var(--text-muted);
+}
+#statusbar .status-item {
+  display: flex;
+  align-items: center;
+  gap: 5px;
+  cursor: default;
+  transition: color var(--duration-fast);
+}
+#statusbar .status-item.clickable { cursor: pointer; }
+#statusbar .status-item.clickable:hover { color: var(--text-secondary); }
+#statusbar .status-spacer { flex: 1; }
+#statusbar .status-accent { color: var(--accent); font-weight: 600; }
+
+/* ================================================================
+   Layer 4: 动画
+   ================================================================ */
+@keyframes glassIn {
+  from {
+    opacity: 0;
+    transform: translateY(6px) scale(0.98);
+    filter: blur(4px);
+  }
+  to {
+    opacity: 1;
+    transform: translateY(0) scale(1);
+    filter: blur(0);
+  }
+}
+.glass-in { animation: glassIn var(--duration-slow) var(--ease-out-expo); }
+@keyframes glowPulseBtn {
+  0%, 100% { box-shadow: 0 0 0 0 var(--accent-glow); }
+  50% { box-shadow: 0 0 20px 4px var(--accent-glow); }
+}
+.glow-pulse { animation: glowPulseBtn 3s ease-in-out infinite; }
+@keyframes shimmer {
+  0% { background-position: -200% 0; }
+  100% { background-position: 200% 0; }
+}
+
+/* ================================================================
+   Layer 4: 关于对话框（Arc 玻璃弹窗）
+   ================================================================ */
+#about-overlay {
+  position: fixed;
+  inset: 0;
+  background: rgba(0,0,0,0.55);
+  backdrop-filter: blur(8px);
+  -webkit-backdrop-filter: blur(8px);
+  z-index: 9999;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+#about-dialog {
+  background: var(--glass-pop);
+  backdrop-filter: blur(var(--blur-popup)) saturate(1.6);
+  -webkit-backdrop-filter: blur(var(--blur-popup)) saturate(1.6);
+  border: 1px solid var(--border-glass-strong);
+  border-radius: var(--radius-xl);
+  padding: 32px 36px;
+  min-width: 340px;
+  box-shadow: var(--shadow-float), var(--shadow-glow);
+  text-align: center;
+  animation: glassIn var(--duration-slow) var(--ease-out-expo);
+  position: relative;
+}
+#about-dialog::before {
+  content: '';
+  position: absolute;
+  top: -1px; left: 30px; right: 30px;
+  height: 1px;
+  background: linear-gradient(90deg, transparent, rgba(255,255,255,0.12), transparent);
+  border-radius: 1px;
+}
+#about-dialog h2 { font-size: 20px; font-weight: 700; margin-bottom: 8px; letter-spacing: -0.02em; }
+#about-dialog p { font-size: 13px; color: var(--text-secondary); margin-bottom: 4px; line-height: 1.6; }
+#about-dialog .close-btn { margin-top: 20px; padding: 8px 24px; }
+
+/* --- 工具提示 --- */
+.tt { position: relative; }
+.tt::after {
+  content: attr(data-tip);
+  position: absolute;
+  bottom: 120%;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--glass-pop);
+  backdrop-filter: blur(var(--blur-popup));
+  -webkit-backdrop-filter: blur(var(--blur-popup));
+  color: var(--text-primary);
+  padding: 5px 10px;
+  border-radius: var(--radius-xs);
+  font-size: 11px;
+  white-space: nowrap;
+  pointer-events: none;
+  opacity: 0;
+  transition: opacity var(--duration-fast);
+  z-index: 9999;
+  border: 1px solid var(--border-glass);
+  box-shadow: var(--shadow-float);
+}
+.tt:hover::after { opacity: 1; }
+</style>
 </head>
 <body>
-    <!-- 导航栏 -->
-    <nav class="nav-bar">
-        <a href="/" class="nav-brand">🐚 麦麦学代码</a>
-        <div class="nav-links">
-            <a href="/" class="nav-link active">监控</a>
-            <div class="nav-dropdown">
-                <span class="nav-link">我的页面 ▾</span>
-                <div class="dropdown-menu" id="page-menu">
-                    <a href="#" style="color:var(--text-muted)">加载中...</a>
-                </div>
-            </div>
-        </div>
-        <span class="nav-port" id="port-display">
-            <span class="conn-status online" id="conn-dot"></span>
-            <span id="port-text"></span>
-        </span>
-    </nav>
 
-    <!-- 状态卡片 -->
-    <div class="grid">
-        <div class="card" id="sandbox-card">
-            <h3>📦 沙箱状态</h3>
-            <div id="sandbox-stats">连接中...</div>
-        </div>
-        <div class="card" id="cache-card">
-            <h3>💾 缓存状态</h3>
-            <div id="cache-stats">连接中...</div>
-        </div>
-        <div class="card" id="knowledge-card">
-            <h3>📝 知识库</h3>
-            <div id="knowledge-stats">连接中...</div>
-        </div>
+<!-- 顶部导航栏 -->
+<nav id="topbar">
+  <div class="traffic-lights">
+    <span class="traffic-light tl-red" data-tip="关闭" title="关闭页面"></span>
+    <span class="traffic-light tl-yellow" title="最小化"></span>
+    <span class="traffic-light tl-green" title="全屏"></span>
+  </div>
+  <a href="/" class="brand">🐚 麦麦学代码</a>
+  <div class="nav-tabs">
+    <div class="nav-tab active" data-page="editor" onclick="switchPage('editor')">📝 工作区</div>
+    <div class="nav-tab" data-page="monitor" onclick="switchPage('monitor')">📊 监控</div>
+    <div class="nav-tab" data-page="pages" onclick="switchPage('pages')">📄 我的页面</div>
+  </div>
+  <div class="conn-indicator">
+    <span class="conn-dot" id="conn-dot"></span>
+    <span id="conn-status">连接中...</span>
+    <span style="margin-left:8px" id="port-display"></span>
+  </div>
+</nav>
+
+<!-- 主工作区 -->
+<div id="workspace">
+  <!-- 活动栏 -->
+  <div id="activitybar">
+    <div class="activity-btn active" data-sidebar="explorer" data-tip="资源管理器" title="资源管理器">📁</div>
+    <div class="activity-btn" data-sidebar="knowledge" data-tip="知识库" title="知识库">🧠</div>
+    <div class="activity-btn" data-sidebar="pages-list" data-tip="Bot 页面" title="Bot 页面">📄</div>
+  </div>
+
+  <!-- 左侧边栏 -->
+  <div id="sidebar">
+    <div class="sidebar-header">
+      <span id="sidebar-title">资源管理器</span>
+      <button class="secondary" style="font-size:10px;padding:2px 6px;" onclick="refreshFileTree()">🔄</button>
     </div>
-
-    <!-- 上下文窗口 -->
-    <div class="card" id="context-card" style="margin-bottom:var(--spacing-md)">
-        <h3>📊 上下文窗口</h3>
-        <div id="context-stats">连接中...</div>
-        <div class="progress-bar"><div class="progress-fill" id="context-bar" style="width:0%"></div></div>
+    <div class="sidebar-content" id="sidebar-content">
+      <!-- 文件树 -->
+      <div id="panel-explorer" class="sidebar-section fade-in">
+        <div class="sidebar-section-title">📁 工作区</div>
+        <div id="file-tree">加载中...</div>
+      </div>
+      <!-- 知识库 -->
+      <div id="panel-knowledge" class="sidebar-section" style="display:none">
+        <div class="sidebar-section-title">🧠 知识库</div>
+        <div id="knowledge-tree">加载中...</div>
+      </div>
+      <!-- Bot 页面 -->
+      <div id="panel-pages-list" class="sidebar-section" style="display:none">
+        <div class="sidebar-section-title">📄 Bot 页面</div>
+        <div id="pages-tree">加载中...</div>
+      </div>
     </div>
+  </div>
 
-    <!-- 实时日志 -->
-    <div class="log-container">
-        <h3>📜 实时日志</h3>
-        <div id="log-entries"></div>
+  <!-- 分隔线 -->
+  <div class="resize-handle" id="handle-sidebar" data-target="sidebar"></div>
+
+  <!-- 中央编辑区 -->
+  <div id="editor-panel">
+    <div id="editor-tabs"></div>
+    <div id="editor-container"></div>
+    <div class="editor-toolbar">
+      <button class="toolbar-btn" onclick="runCode()" title="运行 (Ctrl+Enter)">▶ 运行</button>
+      <button class="toolbar-btn secondary" onclick="saveFile()">💾 保存</button>
+      <select id="editor-lang" onchange="setEditorLang(this.value)" style="font-size:11px;padding:2px 6px;">
+        <option value="python">Python</option>
+        <option value="markdown">Markdown</option>
+        <option value="json">JSON</option>
+        <option value="text">Plain Text</option>
+      </select>
     </div>
+    <div id="editor-output" style="display:none"></div>
+  </div>
 
-    <script>
-        const logContainer = document.getElementById('log-entries');
-        const MAX_LOGS = 100;
+  <!-- 分隔线 -->
+  <div class="resize-handle" id="handle-assistant" data-target="assistant-panel"></div>
 
-        function addLog(entry) {
-            const div = document.createElement('div');
-            div.className = 'log-entry';
-            const time = new Date(entry.timestamp * 1000).toLocaleTimeString();
-            const msg = entry.data.message || JSON.stringify(entry.data);
-            div.innerHTML = `<span class="log-time">[${time}]</span> ${escapeHtml(msg)}`;
-            logContainer.prepend(div);
-            while (logContainer.children.length > MAX_LOGS) {
-                logContainer.removeChild(logContainer.lastChild);
-            }
+  <!-- 右侧麦麦助手面板 -->
+  <div id="assistant-panel">
+    <div class="assistant-header">
+      <span>💬 麦麦助手</span>
+      <button class="secondary" style="font-size:10px;padding:2px 6px;" onclick="document.getElementById('assistant-panel').classList.toggle('collapsed')">收起</button>
+    </div>
+    <div class="assistant-content">
+      <!-- 沙箱状态 -->
+      <div class="assistant-card">
+        <h4>📦 沙箱</h4>
+        <div id="assist-sandbox">
+          <div class="assistant-stat"><span class="stat-label">执行次数</span><span class="stat-value">0</span></div>
+          <div class="assistant-stat"><span class="stat-label">成功 / 失败</span><span class="stat-value good" id="sb-success">0</span><span class="stat-value"> / </span><span class="stat-value danger" id="sb-failed">0</span></div>
+          <div class="assistant-stat"><span class="stat-label">平均耗时</span><span class="stat-value">0ms</span></div>
+        </div>
+      </div>
+      <!-- 缓存状态 -->
+      <div class="assistant-card">
+        <h4>💾 缓存</h4>
+        <div id="assist-cache">
+          <div class="assistant-stat"><span class="stat-label">活跃 / 容量</span><span class="stat-value"><span id="cache-active">0</span> / <span id="cache-max">500</span></span></div>
+          <div class="mini-progress"><div class="mini-progress-fill" id="cache-bar" style="width:0%"></div></div>
+          <div class="assistant-stat"><span class="stat-label">命中率</span><span class="stat-value good" id="cache-hr">0%</span></div>
+        </div>
+      </div>
+      <!-- 上下文 -->
+      <div class="assistant-card">
+        <h4>📊 上下文窗口</h4>
+        <div id="assist-context">
+          <div class="assistant-stat"><span class="stat-label">Token</span><span class="stat-value"><span id="ctx-used">0</span> / <span id="ctx-max">8000</span></span></div>
+          <div class="mini-progress"><div class="mini-progress-fill" id="ctx-bar" style="width:0%"></div></div>
+        </div>
+      </div>
+      <!-- 操作日志 -->
+      <div class="assistant-card" style="flex:1;display:flex;flex-direction:column;min-height:0;">
+        <h4>📜 操作日志</h4>
+        <div id="assistant-log"></div>
+      </div>
+      <!-- 输入区 -->
+      <div id="assistant-input-area">
+        <input type="text" id="assistant-input" placeholder="输入 /code run 命令或消息..."
+               onkeydown="if(event.key==='Enter')sendAssistantMsg()">
+        <button onclick="sendAssistantMsg()" title="发送">→</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- 底部状态栏 -->
+<div id="statusbar">
+  <span class="status-item">Ln <span id="status-ln">1</span>, Col <span id="status-col">1</span></span>
+  <span class="status-item">UTF-8</span>
+  <span class="status-item" id="status-lang">Python</span>
+  <span class="status-spacer"></span>
+  <span class="status-item clickable" onclick="toggleAbout()">🐚 麦麦学代码 v0.1.0</span>
+  <span class="status-item" id="status-time"></span>
+</div>
+
+<!-- 关于对话框 -->
+<div id="about-overlay" style="display:none" onclick="if(event.target===this)toggleAbout()">
+  <div id="about-dialog">
+    <h2>🐚 麦麦学代码</h2>
+    <p>版本 0.1.0 — 守护者控制台</p>
+    <p style="font-size:11px;margin-top:8px;color:var(--text-muted)">GLASS × Arc 深度玻璃设计 v2</p>
+    <p style="font-size:11px;color:var(--text-muted)">Archangel Deep 守护者界面</p>
+    <button class="close-btn" onclick="toggleAbout()">关闭</button>
+  </div>
+</div>
+
+<script type="module">
+import { EditorView, keymap, lineNumbers, highlightActiveLine, highlightSpecialChars,
+         drawSelection, rectangularSelection, placeholder } from 'codemirror';
+import { EditorState } from 'codemirror/state';
+import { python } from 'codemirror/lang-python';
+import { oneDark } from 'codemirror/theme-one-dark';
+import { defaultKeymap, history, historyKeymap } from 'codemirror/commands';
+import { indentOnInput, bracketMatching, foldGutter } from 'codemirror/language';
+import { closeBrackets, autocompletion, completionKeymap } from 'codemirror/autocomplete';
+import { searchKeymap } from 'codemirror/search';
+
+// ================================================================
+// 全局状态
+// ================================================================
+const MAX_LOGS = 100;
+let editorView = null;
+let activeTab = { path: 'welcome.py', content: '# 欢迎使用麦麦学代码 🐚\n# 在此编写 Python 代码，点击 ▶ 运行\n\nprint("你好，守护者！")\n\n', saved: true };
+let openTabs = [activeTab];
+let activeSidebar = 'explorer';
+let fileTreeData = [];
+let currentLang = 'python';
+let sseConn = null;
+
+// ================================================================
+// 编辑器初始化
+// ================================================================
+function createEditor() {
+  const container = document.getElementById('editor-container');
+  const ext = [
+    lineNumbers(),
+    highlightActiveLine(),
+    highlightSpecialChars(),
+    drawSelection(),
+    rectangularSelection(),
+    history(),
+    foldGutter(),
+    indentOnInput(),
+    bracketMatching(),
+    closeBrackets(),
+    autocompletion(),
+    placeholder('在此编写代码...'),
+    keymap.of([
+      ...defaultKeymap,
+      ...historyKeymap,
+      ...completionKeymap,
+      ...searchKeymap,
+      { key: 'Ctrl-Enter', run: () => { runCode(); return true; } },
+      { key: 'Ctrl-s', run: () => { saveFile(); return true; }, preventDefault: true },
+    ]),
+    EditorView.updateListener.of(update => {
+      if (update.docChanged) {
+        activeTab.saved = false;
+        updateTabs();
+      }
+      const pos = update.state.selection.main.head;
+      const line = update.state.doc.lineAt(pos);
+      document.getElementById('status-ln').textContent = line.number;
+      document.getElementById('status-col').textContent = pos - line.from + 1;
+    }),
+  ];
+
+  if (currentLang === 'python') ext.push(python());
+  ext.push(oneDark);
+
+  const state = EditorState.create({ doc: activeTab.content, extensions: ext });
+  editorView = new EditorView({ state, parent: container });
+  updateTabs();
+}
+
+function switchEditorLang(lang) {
+  currentLang = lang;
+  document.getElementById('editor-lang').value = lang;
+  document.getElementById('status-lang').textContent = lang === 'python' ? 'Python' : lang === 'markdown' ? 'Markdown' : lang === 'json' ? 'JSON' : 'Plain Text';
+
+  if (!editorView) return;
+  const state = editorView.state;
+  const extensions = state.facet(EditorView.plugin).map(p => p);
+  const newExt = extensions.filter(e => !(e && e.name && e.name.includes('python')));
+  if (lang === 'python') newExt.push(python());
+  // Rebuild with current content
+  const doc = state.doc.toString();
+  editorView.destroy();
+  const container = document.getElementById('editor-container');
+  const state2 = EditorState.create({ doc, extensions: [oneDark, lineNumbers(), ...newExt] });
+  editorView = new EditorView({ state: state2, parent: container });
+}
+
+window.setEditorLang = switchEditorLang;
+
+// ================================================================
+// 标签页管理
+// ================================================================
+function updateTabs() {
+  const tabsEl = document.getElementById('editor-tabs');
+  tabsEl.innerHTML = openTabs.map((t, i) => `
+    <div class="editor-tab${t.path === activeTab.path ? ' active' : ''}"
+         onclick="switchToTab(${i})">
+      <span>${t.saved ? '' : '● '}${t.path.split('/').pop()}</span>
+      <span class="tab-close" onclick="event.stopPropagation();closeTab(${i})">&times;</span>
+    </div>
+  `).join('');
+}
+
+function openFile(path, content) {
+  const existing = openTabs.find(t => t.path === path);
+  if (existing) {
+    activeTab = existing;
+    switchToTab(openTabs.indexOf(existing));
+    return;
+  }
+  const newTab = { path, content, saved: true };
+  openTabs.push(newTab);
+  activeTab = newTab;
+  if (editorView) {
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: content }
+    });
+  }
+  updateTabs();
+  // Auto-detect language
+  if (path.endsWith('.py')) switchEditorLang('python');
+  else if (path.endsWith('.md')) switchEditorLang('markdown');
+  else if (path.endsWith('.json')) switchEditorLang('json');
+  else if (path.endsWith('.toml')) switchEditorLang('text');
+}
+
+function closeTab(index) {
+  if (openTabs.length <= 1) return;
+  const wasActive = openTabs[index].path === activeTab.path;
+  openTabs.splice(index, 1);
+  if (wasActive) {
+    activeTab = openTabs[Math.min(index, openTabs.length - 1)];
+    if (editorView) {
+      editorView.dispatch({
+        changes: { from: 0, to: editorView.state.doc.length, insert: activeTab.content }
+      });
+    }
+  }
+  updateTabs();
+}
+
+window.switchToTab = function(index) {
+  if (activeTab.path === openTabs[index].path) return;
+  // Save current content
+  if (editorView && !activeTab.saved) {
+    activeTab.content = editorView.state.doc.toString();
+  }
+  activeTab = openTabs[index];
+  if (editorView) {
+    editorView.dispatch({
+      changes: { from: 0, to: editorView.state.doc.length, insert: activeTab.content }
+    });
+  }
+  updateTabs();
+  // Auto-detect language
+  const path = activeTab.path;
+  if (path.endsWith('.py')) switchEditorLang('python');
+  else if (path.endsWith('.md')) switchEditorLang('markdown');
+  else if (path.endsWith('.json')) switchEditorLang('json');
+};
+
+window.closeTab = closeTab;
+
+// ================================================================
+// 文件操作
+// ================================================================
+async function loadFileTree() {
+  try {
+    const resp = await fetch('/api/files');
+    const data = await resp.json();
+    fileTreeData = data.tree || [];
+    renderFileTree(fileTreeData);
+  } catch (e) {
+    document.getElementById('file-tree').innerHTML = '加载失败';
+  }
+}
+
+function renderFileTree(tree, container = document.getElementById('file-tree'), indent = 0) {
+  if (indent === 0) container.innerHTML = '';
+  tree.forEach(node => {
+    const div = document.createElement('div');
+    div.className = 'tree-item';
+    div.style.setProperty('--indent', indent);
+    const icon = node.is_dir ? '📁' : (node.name.endsWith('.py') ? '🐍' : node.name.endsWith('.md') ? '📝' : '📄');
+    const chevron = node.is_dir ? '<span class="tree-chevron">▶</span>' : '';
+    div.innerHTML = `${chevron}<span class="tree-icon">${icon}</span><span>${node.name}</span>`;
+
+    if (node.is_dir) {
+      const chevronEl = div.querySelector('.tree-chevron');
+      const childrenContainer = document.createElement('div');
+      childrenContainer.style.display = 'none';
+      div.onclick = (e) => {
+        if (e.target === chevronEl || e.target.classList.contains('tree-chevron')) {
+          const isOpen = childrenContainer.style.display !== 'none';
+          childrenContainer.style.display = isOpen ? 'none' : '';
+          chevronEl.classList.toggle('open', !isOpen);
+        } else {
+          // Select directory
+          document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+          div.classList.add('selected');
         }
-
-        function escapeHtml(text) {
-            const d = document.createElement('div');
-            d.textContent = text;
-            return d.innerHTML;
+      };
+      renderFileTree(node.children || [], childrenContainer, indent + 1);
+      container.appendChild(div);
+      container.appendChild(childrenContainer);
+    } else {
+      div.onclick = async () => {
+        document.querySelectorAll('.tree-item.selected').forEach(el => el.classList.remove('selected'));
+        div.classList.add('selected');
+        // Load and open file
+        try {
+          const resp = await fetch(`/api/file?path=${encodeURIComponent(node.path)}`);
+          const data = await resp.json();
+          if (data.content !== undefined) {
+            openFile(node.path, data.content);
+          }
+        } catch (e) {
+          addAssistantLog(`读取失败: ${node.path}`, 'warn');
         }
+      };
+      container.appendChild(div);
+    }
+  });
+}
 
-        function updateStats(stats) {
-            // 端口
-            if (stats.server) {
-                document.getElementById('port-text').textContent = '端口: ' + stats.server.port;
-            }
-            // 沙箱
-            const sb = stats.sandbox || {};
-            document.getElementById('sandbox-stats').innerHTML =
-                `<div class="stat-row"><span>执行次数</span><span class="stat-value">${sb.total || 0}</span></div>` +
-                `<div class="stat-row"><span>成功</span><span class="stat-value">${sb.success || 0}</span></div>` +
-                `<div class="stat-row"><span>失败</span><span class="stat-value ${(sb.failed||0) > 0 ? 'danger' : ''}">${sb.failed || 0}</span></div>` +
-                `<div class="stat-row"><span>平均耗时</span><span class="stat-value">${sb.avg_time_ms || 0}ms</span></div>`;
-            // 缓存
-            const cache = stats.cache || {};
-            const hitRate = cache.total_entries ? Math.round((cache.total_hits || 0) / Math.max(cache.total_entries, 1) * 100) : 0;
-            document.getElementById('cache-stats').innerHTML =
-                `<div class="stat-row"><span>命中率</span><span class="stat-value">${hitRate}%</span></div>` +
-                `<div class="stat-row"><span>活跃条目</span><span class="stat-value">${cache.active_entries || 0}</span></div>` +
-                `<div class="stat-row"><span>过期条目</span><span class="stat-value warn">${cache.expired_entries || 0}</span></div>` +
-                `<div class="stat-row"><span>容量</span><span class="stat-value">${cache.active_entries || 0}/${cache.max_entries || 500}</span></div>`;
-            // 知识库
-            const kb = stats.knowledge || {};
-            document.getElementById('knowledge-stats').innerHTML =
-                `<div class="stat-row"><span>总条目</span><span class="stat-value">${kb.total || 0}</span></div>` +
-                `<div class="stat-row"><span>分类数</span><span class="stat-value">${kb.categories || 0}</span></div>` +
-                `<div class="stat-row"><span>最近更新</span><span class="stat-value">${kb.last_updated || '-'}</span></div>`;
-            // 上下文
-            const ctx = stats.context || {};
-            const ctxPct = ctx.context_max_tokens ? Math.round((ctx.context_tokens_estimate || 0) / ctx.context_max_tokens * 100) : 0;
-            document.getElementById('context-stats').innerHTML =
-                `<div class="stat-row"><span>对话轮次</span><span class="stat-value">${ctx.context_turns || 0}</span></div>` +
-                `<div class="stat-row"><span>Token 估算</span><span class="stat-value">${ctx.context_tokens_estimate || 0}/${ctx.context_max_tokens || 8000}</span></div>` +
-                `<div class="stat-row"><span>当前话题</span><span class="stat-value">${ctx.current_topic || '无'}</span></div>`;
-            const bar = document.getElementById('context-bar');
-            bar.style.width = ctxPct + '%';
-            if (ctxPct > 80) bar.style.background = 'var(--color-danger)';
-            else if (ctxPct > 60) bar.style.background = 'var(--color-warning)';
-            else bar.style.background = 'var(--color-success)';
-        }
+window.refreshFileTree = loadFileTree;
 
-        function loadPages() {
-            fetch('/api/pages')
-                .then(r => r.json())
-                .then(data => {
-                    const menu = document.getElementById('page-menu');
-                    if (!data.pages || data.pages.length === 0) {
-                        menu.innerHTML = '<a href="#" style="color:var(--text-muted)">暂无页面</a>';
-                        return;
-                    }
-                    menu.innerHTML = data.pages.map(p =>
-                        `<a href="/pages/${p.name}">${escapeHtml(p.title)}</a>`
-                    ).join('');
-                })
-                .catch(() => {
-                    document.getElementById('page-menu').innerHTML = '<a href="#" style="color:var(--text-muted)">加载失败</a>';
-                });
-        }
+async function saveFile() {
+  if (!editorView) return;
+  activeTab.content = editorView.state.doc.toString();
+  try {
+    const resp = await fetch('/api/file/write', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ path: activeTab.path, content: activeTab.content })
+    });
+    const data = await resp.json();
+    if (data.success !== false && !data.error) {
+      activeTab.saved = true;
+      updateTabs();
+      addAssistantLog(`已保存: ${activeTab.path}`, 'ok');
+    } else {
+      addAssistantLog(`保存失败: ${data.error || '未知错误'}`, 'err');
+    }
+  } catch (e) {
+    addAssistantLog(`保存异常: ${e.message}`, 'err');
+  }
+}
+window.saveFile = saveFile;
 
-        // SSE 连接
-        function connectSSE() {
-            const es = new EventSource('/api/stream');
-            es.addEventListener('stats', (e) => {
-                updateStats(JSON.parse(e.data));
-                document.getElementById('conn-dot').className = 'conn-status online';
-            });
-            es.addEventListener('log', (e) => {
-                addLog(JSON.parse(e.data));
-            });
-            es.onerror = () => {
-                document.getElementById('conn-dot').className = 'conn-status offline';
-            };
-            // 重连由 EventSource 自动处理
-        }
+// ================================================================
+// 代码执行
+// ================================================================
+async function runCode() {
+  if (!editorView) return;
+  const code = editorView.state.doc.toString();
+  if (!code.trim()) {
+    addAssistantLog('代码为空', 'warn');
+    return;
+  }
+  addAssistantLog(`执行: ${code.split('\n')[0].substring(0, 60)}...`, 'info');
+  const outputEl = document.getElementById('editor-output');
+  outputEl.style.display = 'block';
+  outputEl.className = '';
+  outputEl.textContent = '执行中...';
 
-        // 初始化
-        loadPages();
-        connectSSE();
-    </script>
+  try {
+    const resp = await fetch('/api/execute', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({ code })
+    });
+    const data = await resp.json();
+    if (data.success) {
+      outputEl.textContent = data.stdout || '(无输出)';
+      outputEl.className = '';
+      addAssistantLog(`执行成功 ${data.execution_time_ms}ms`, 'ok');
+    } else {
+      outputEl.textContent = data.stderr || data.error || '未知错误';
+      outputEl.className = 'type-error';
+      addAssistantLog(`执行失败: ${(data.error || data.stderr || '').substring(0, 80)}`, 'err');
+    }
+  } catch (e) {
+    outputEl.textContent = `请求失败: ${e.message}`;
+    outputEl.className = 'type-error';
+    addAssistantLog(`请求失败: ${e.message}`, 'err');
+  }
+}
+window.runCode = runCode;
+
+// ================================================================
+// 侧边栏管理
+// ================================================================
+function switchSidebar(name) {
+  activeSidebar = name;
+  document.querySelectorAll('#activitybar .activity-btn').forEach(b => b.classList.remove('active'));
+  const btn = document.querySelector(`[data-sidebar="${name}"]`);
+  if (btn) btn.classList.add('active');
+
+  document.getElementById('panel-explorer').style.display = name === 'explorer' ? '' : 'none';
+  document.getElementById('panel-knowledge').style.display = name === 'knowledge' ? '' : 'none';
+  document.getElementById('panel-pages-list').style.display = name === 'pages-list' ? '' : 'none';
+
+  const titles = { explorer: '资源管理器', knowledge: '知识库', 'pages-list': 'Bot 页面' };
+  document.getElementById('sidebar-title').textContent = titles[name] || '资源管理器';
+
+  document.getElementById('sidebar').classList.remove('collapsed');
+
+  if (name === 'knowledge') loadKnowledge();
+  if (name === 'pages-list') loadPages();
+}
+
+document.getElementById('activitybar').addEventListener('click', (e) => {
+  const btn = e.target.closest('.activity-btn');
+  if (!btn) return;
+  const name = btn.dataset.sidebar;
+  if (activeSidebar === name && !document.getElementById('sidebar').classList.contains('collapsed')) {
+    document.getElementById('sidebar').classList.add('collapsed');
+    document.querySelectorAll('#activitybar .activity-btn').forEach(b => b.classList.remove('active'));
+  } else {
+    switchSidebar(name);
+  }
+});
+
+// ================================================================
+// 分隔线拖拽
+// ================================================================
+function initResizeHandle(handleId, targetId) {
+  const handle = document.getElementById(handleId);
+  const target = document.getElementById(targetId);
+  let dragging = false, startX, startW;
+
+  handle.addEventListener('mousedown', (e) => {
+    dragging = true;
+    startX = e.clientX;
+    startW = target.offsetWidth;
+    handle.classList.add('dragging');
+    document.body.style.cursor = 'col-resize';
+    document.body.style.userSelect = 'none';
+  });
+
+  document.addEventListener('mousemove', (e) => {
+    if (!dragging) return;
+    const delta = targetId === 'sidebar' ? (e.clientX - startX) : (startX - e.clientX);
+    let newW = startW + delta;
+    if (targetId === 'sidebar') newW = Math.max(180, Math.min(500, newW));
+    else newW = Math.max(240, Math.min(500, newW));
+    target.style.width = newW + 'px';
+    target.classList.remove('collapsed');
+  });
+
+  document.addEventListener('mouseup', () => {
+    if (!dragging) return;
+    dragging = false;
+    handle.classList.remove('dragging');
+    document.body.style.cursor = '';
+    document.body.style.userSelect = '';
+  });
+}
+
+initResizeHandle('handle-sidebar', 'sidebar');
+initResizeHandle('handle-assistant', 'assistant-panel');
+
+// ================================================================
+// 知识库加载
+// ================================================================
+async function loadKnowledge() {
+  const el = document.getElementById('knowledge-tree');
+  try {
+    const resp = await fetch('/api/knowledge');
+    const data = await resp.json();
+    const total = data.total || data.total_entries || 0;
+    const categories = data.categories || 0;
+    el.innerHTML = `<div class="tree-item" style="--indent:0"><span class="tree-icon">📚</span>总条目: ${total}</div>
+      <div class="tree-item" style="--indent:0"><span class="tree-icon">🗂</span>分类: ${categories}</div>`;
+  } catch (e) {
+    el.innerHTML = '<div class="tree-item">加载失败</div>';
+  }
+}
+
+// ================================================================
+// Bot 页面加载
+// ================================================================
+async function loadPages() {
+  const el = document.getElementById('pages-tree');
+  try {
+    const resp = await fetch('/api/pages');
+    const data = await resp.json();
+    const pages = data.pages || [];
+    if (pages.length === 0) {
+      el.innerHTML = '<div class="tree-item" style="--indent:0">暂无页面</div>';
+      return;
+    }
+    el.innerHTML = pages.map(p => `
+      <div class="tree-item" style="--indent:0;cursor:pointer"
+           onclick="window.open('/pages/${p.name}', '_blank')">
+        <span class="tree-icon">📄</span>${p.title}
+      </div>
+    `).join('');
+  } catch (e) {
+    el.innerHTML = '<div class="tree-item">加载失败</div>';
+  }
+}
+
+// ================================================================
+// 页面切换
+// ================================================================
+window.switchPage = function(name) {
+  document.getElementById('editor-panel').style.display = name === 'editor' ? '' : 'none';
+  document.querySelectorAll('#topbar .nav-tab').forEach(t => t.classList.remove('active'));
+  document.querySelector(`[data-page="${name}"]`).classList.add('active');
+  // TODO: 监控视图切换
+};
+
+// ================================================================
+// 麦麦助手日志
+// ================================================================
+function addAssistantLog(msg, type = 'info') {
+  const logEl = document.getElementById('assistant-log');
+  const now = new Date().toLocaleTimeString();
+  const div = document.createElement('div');
+  div.className = 'log-line';
+  div.innerHTML = `<span class="log-time">[${now}]</span>${msg}`;
+  logEl.appendChild(div);
+  while (logEl.children.length > MAX_LOGS) logEl.removeChild(logEl.firstChild);
+  logEl.scrollTop = logEl.scrollHeight;
+}
+
+// ================================================================
+// 助手命令处理
+// ================================================================
+async function sendAssistantMsg() {
+  const input = document.getElementById('assistant-input');
+  const msg = input.value.trim();
+  if (!msg) return;
+  input.value = '';
+  addAssistantLog(`> ${msg}`, 'info');
+
+  // /code run 命令
+  if (msg.startsWith('/code run ')) {
+    const code = msg.substring(10).trim();
+    try {
+      const resp = await fetch('/api/execute', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ code })
+      });
+      const data = await resp.json();
+      if (data.success) {
+        addAssistantLog(`✅ ${data.stdout || '(无输出)'}`, 'ok');
+      } else {
+        addAssistantLog(`❌ ${data.stderr || data.error || '失败'}`, 'err');
+      }
+    } catch (e) {
+      addAssistantLog(`请求失败: ${e.message}`, 'err');
+    }
+  }
+  // /code stats 命令
+  else if (msg === '/code stats') {
+    try {
+      const resp = await fetch('/api/status');
+      const data = await resp.json();
+      addAssistantLog(`缓存: ${data.cache?.active_entries || 0} 活跃, 沙箱: ${data.sandbox?.total || 0} 次执行`, 'ok');
+    } catch (e) {
+      addAssistantLog(`获取状态失败`, 'err');
+    }
+  }
+  // /code help 命令
+  else if (msg === '/code help' || msg === '/help') {
+    addAssistantLog('可用命令: /code run <代码>, /code stats, /code cache clear, /code help', 'ok');
+  }
+  // 普通消息
+  else {
+    addAssistantLog('已收到消息。可用 /code run 执行代码，或 /help 查看帮助。', 'ok');
+  }
+}
+window.sendAssistantMsg = sendAssistantMsg;
+
+// ================================================================
+// SSE 实时连接
+// ================================================================
+function connectSSE() {
+  const es = new EventSource('/api/stream');
+  sseConn = es;
+
+  es.addEventListener('stats', (e) => {
+    try {
+      const stats = JSON.parse(e.data);
+      updateAssistantStats(stats);
+      updatePortDisplay(stats);
+      document.getElementById('conn-dot').classList.remove('offline');
+      document.getElementById('conn-status').textContent = '已连接';
+    } catch (err) {}
+  });
+
+  es.addEventListener('log', (e) => {
+    try {
+      const event = JSON.parse(e.data);
+      const msg = event.data?.message || JSON.stringify(event);
+      addAssistantLog(msg, 'ok');
+    } catch (err) {}
+  });
+
+  es.onerror = () => {
+    document.getElementById('conn-dot').classList.add('offline');
+    document.getElementById('conn-status').textContent = '连接断开';
+  };
+}
+
+function updateAssistantStats(stats) {
+  // 沙箱
+  const sb = stats.sandbox || {};
+  document.getElementById('sb-success').textContent = sb.success || 0;
+  document.getElementById('sb-failed').textContent = sb.failed || 0;
+
+  // 缓存
+  const cache = stats.cache || {};
+  const active = cache.active_entries || 0;
+  const max = cache.max_entries || 500;
+  const pct = max ? Math.round(active / max * 100) : 0;
+  document.getElementById('cache-active').textContent = active;
+  document.getElementById('cache-max').textContent = max;
+  const bar = document.getElementById('cache-bar');
+  bar.style.width = pct + '%';
+  bar.style.background = pct > 80 ? 'var(--danger)' : pct > 60 ? 'var(--warning)' : 'var(--success)';
+
+  const totalHits = cache.total_hits || 0;
+  const hitRate = active ? Math.round(totalHits / Math.max(active, 1) * 100) : 0;
+  document.getElementById('cache-hr').textContent = hitRate + '%';
+
+  // 上下文
+  const ctx = stats.context || {};
+  const used = ctx.context_tokens_estimate || 0;
+  const ctxMax = ctx.context_max_tokens || 8000;
+  const ctxPct = ctxMax ? Math.round(used / ctxMax * 100) : 0;
+  document.getElementById('ctx-used').textContent = used;
+  document.getElementById('ctx-max').textContent = ctxMax;
+  const ctxBar = document.getElementById('ctx-bar');
+  ctxBar.style.width = ctxPct + '%';
+  ctxBar.style.background = ctxPct > 80 ? 'var(--danger)' : ctxPct > 60 ? 'var(--warning)' : 'var(--success)';
+}
+
+function updatePortDisplay(stats) {
+  if (stats.server?.port) {
+    document.getElementById('port-display').textContent = `:${stats.server.port}`;
+  }
+}
+
+// ================================================================
+// 状态栏时钟
+// ================================================================
+function updateClock() {
+  document.getElementById('status-time').textContent = new Date().toLocaleTimeString();
+}
+setInterval(updateClock, 1000);
+updateClock();
+
+// ================================================================
+// 关于对话框
+// ================================================================
+window.toggleAbout = function() {
+  const ov = document.getElementById('about-overlay');
+  ov.style.display = ov.style.display === 'none' || !ov.style.display ? '' : 'none';
+};
+
+// ================================================================
+// 键盘快捷键
+// ================================================================
+document.addEventListener('keydown', (e) => {
+  if ((e.ctrlKey || e.metaKey) && e.key === 'b') {
+    e.preventDefault();
+    const sidebar = document.getElementById('sidebar');
+    sidebar.classList.toggle('collapsed');
+  }
+  if ((e.ctrlKey || e.metaKey) && e.key === 'j') {
+    e.preventDefault();
+    const panel = document.getElementById('assistant-panel');
+    panel.classList.toggle('collapsed');
+  }
+});
+
+// ================================================================
+// 初始化
+// ================================================================
+createEditor();
+loadFileTree();
+connectSSE();
+updateClock();
+</script>
 </body>
 </html>

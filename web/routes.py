@@ -20,9 +20,11 @@ import json
 import logging
 import os
 import time
+from typing import TYPE_CHECKING
 
 from aiohttp import web
 
+from ..sandbox import execute_with_safety_check
 from .page_builder import PageBuilder
 
 if TYPE_CHECKING:
@@ -53,6 +55,10 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_get("/api/cache", lambda r: _handle_cache(r, plugin))
     app.router.add_get("/api/sandbox", lambda r: _handle_sandbox(r, plugin))
     app.router.add_get("/api/debug_log", lambda r: _handle_debug_log(r, plugin))
+    app.router.add_get("/api/files", lambda r: _handle_files(r, plugin))
+    app.router.add_get("/api/file", lambda r: _handle_file_read(r, plugin))
+    app.router.add_post("/api/file/write", lambda r: _handle_file_write(r, plugin))
+    app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
 
     # 静态文件
     app.router.add_get("/static/theme.css", lambda r: _handle_static_theme(r, plugin))
@@ -244,6 +250,140 @@ async def _handle_debug_log(request: web.Request, plugin: "MaiStudyCodePlugin") 
     return web.json_response({"logs": logs, "total": len(logs)})
 
 
+async def _handle_files(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """工作区文件树 API。
+
+    Query 参数:
+        dir: 相对于工作区的子目录（可选，默认根目录）。
+    """
+    sub_dir = request.query.get("dir", "").strip()
+    # 安全检查：防止路径遍历
+    if ".." in sub_dir:
+        return web.json_response({"error": "禁止访问上级目录"}, status=403)
+
+    base_path = plugin._workspace_dir
+    if sub_dir:
+        base_path = os.path.join(base_path, sub_dir)
+        if not os.path.realpath(base_path).startswith(os.path.realpath(plugin._workspace_dir)):
+            return web.json_response({"error": "路径不在工作区内"}, status=403)
+
+    if not os.path.isdir(base_path):
+        return web.json_response({"error": "目录不存在"}, status=404)
+
+    tree = _build_file_tree(base_path, plugin._workspace_dir)
+    return web.json_response({"tree": tree, "root": sub_dir or "."})
+
+
+async def _handle_file_read(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """读取工作区文件内容。
+
+    Query 参数:
+        path: 相对于工作区的文件路径。
+    """
+    file_path = request.query.get("path", "").strip()
+    if not file_path:
+        return web.json_response({"error": "缺少 path 参数"}, status=400)
+    if ".." in file_path:
+        return web.json_response({"error": "禁止访问上级目录"}, status=403)
+
+    full_path = os.path.join(plugin._workspace_dir, file_path)
+    real_path = os.path.realpath(full_path)
+    if not real_path.startswith(os.path.realpath(plugin._workspace_dir)):
+        return web.json_response({"error": "路径不在工作区内"}, status=403)
+
+    if not os.path.isfile(real_path):
+        return web.json_response({"error": "文件不存在"}, status=404)
+
+    try:
+        with open(real_path, "r", encoding="utf-8") as f:
+            content = f.read()
+        return web.json_response({"path": file_path, "content": content})
+    except Exception as e:
+        return web.json_response({"error": f"读取失败: {e}"}, status=500)
+
+
+async def _handle_file_write(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """写入工作区文件。
+
+    Body (JSON):
+        path: 相对于工作区的文件路径。
+        content: 文件内容。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"error": "请求体不是有效 JSON"}, status=400)
+
+    file_path = str(body.get("path", "") or "").strip()
+    content = str(body.get("content", "") or "")
+    if not file_path:
+        return web.json_response({"error": "缺少 path 参数"}, status=400)
+    if ".." in file_path:
+        return web.json_response({"error": "禁止访问上级目录"}, status=403)
+
+    full_path = os.path.join(plugin._workspace_dir, file_path)
+    real_path = os.path.realpath(full_path)
+    if not real_path.startswith(os.path.realpath(plugin._workspace_dir)):
+        return web.json_response({"error": "路径不在工作区内"}, status=403)
+
+    try:
+        os.makedirs(os.path.dirname(real_path), exist_ok=True)
+        with open(real_path, "w", encoding="utf-8") as f:
+            f.write(content)
+        return web.json_response({"success": True, "path": file_path})
+    except Exception as e:
+        return web.json_response({"error": f"写入失败: {e}"}, status=500)
+
+
+async def _handle_execute(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """执行 Python 代码。
+
+    Body (JSON):
+        code: Python 源码。
+    """
+    import asyncio as _asyncio
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    code = str(body.get("code", "") or "").strip()
+    if not code:
+        return web.json_response({"error": "代码为空"}, status=400)
+
+    try:
+        future = _asyncio.get_running_loop().run_in_executor(
+            None,
+            lambda: execute_with_safety_check(code),
+        )
+        result = await _asyncio.wait_for(future, timeout=15)
+    except _asyncio.TimeoutError:
+        return web.json_response({"error": "执行超时"}, status=504)
+    except Exception as e:
+        return web.json_response({"error": f"执行异常: {e}"}, status=500)
+
+    # 统计更新
+    plugin._update_sandbox_stats(result.success, result.execution_time_ms)
+
+    # 发布事件
+    if plugin._event_bus:
+        code_preview = code[:80].replace("\n", " ")
+        plugin._event_bus.publish("exec", {
+            "message": f"WebIDE: {code_preview}... → {'成功' if result.success else '失败'} {result.execution_time_ms:.0f}ms",
+            "success": result.success,
+            "time_ms": result.execution_time_ms,
+        })
+
+    return web.json_response({
+        "success": result.success,
+        "stdout": result.stdout or "",
+        "stderr": result.stderr or "",
+        "error": result.error or "",
+        "execution_time_ms": result.execution_time_ms,
+    })
+
+
 async def _handle_static_theme(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
     """静态主题 CSS 文件。"""
     theme_path = os.path.join(plugin._workspace_dir, "web", "theme.css")
@@ -327,3 +467,47 @@ def _default_theme_css() -> str:
     --shadow-card: 0 2px 8px rgba(0, 0, 0, 0.3);
 }
 """
+
+
+def _build_file_tree(base_path: str, workspace_dir: str) -> list:
+    """递归构建工作区文件树。
+
+    Args:
+        base_path: 要列举的根目录。
+        workspace_dir: 工作区根目录（用于计算相对路径）。
+
+    Returns:
+        list: 文件/目录节点列表。
+    """
+    try:
+        entries = sorted(os.listdir(base_path))
+    except PermissionError:
+        return []
+
+    tree = []
+    ignored = {".git", "__pycache__", ".pytest_cache", "logs", "backup", "dev", "test", "node_modules"}
+
+    for name in entries:
+        if name.startswith(".") and name != ".gitignore":
+            continue
+        if name in ignored:
+            continue
+
+        full_path = os.path.join(base_path, name)
+        try:
+            rel_path = os.path.relpath(full_path, workspace_dir)
+        except ValueError:
+            rel_path = name
+
+        node = {
+            "name": name,
+            "path": rel_path,
+            "is_dir": os.path.isdir(full_path),
+        }
+
+        if node["is_dir"]:
+            node["children"] = _build_file_tree(full_path, workspace_dir)
+
+        tree.append(node)
+
+    return tree
