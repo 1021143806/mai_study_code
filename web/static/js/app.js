@@ -5,6 +5,7 @@ import { loadFileTree, renderSidebar, switchSidebar, addRecentFile } from './sid
 import { connectSSE, sendChatMsg, clearChat, addAssistantLog } from './chat.js';
 import { loadWorkspaces, switchWorkspace, showWsDialog, closeWsDialog, saveWsFromForm, deleteWs, testWsConn } from './workspace.js';
 import { toggleConfigVisual, updateConfigField, saveConfigVisual } from './config.js';
+import { initTokenChart, addTokenBar, clearTokenChart, compressCache, onTokenBarEvent, updateContextMax, promptEditMaxTokens } from './token-chart.js';
 
 // ================================================================
 // 暴露给 HTML onclick 的函数
@@ -42,6 +43,13 @@ window.testWsConn = testWsConn;
 window.toggleConfigVisual = toggleConfigVisual;
 window.updateConfigField = updateConfigField;
 window.saveConfigVisual = saveConfigVisual;
+
+// Token 仪表盘
+window.compressCache = compressCache;
+window.clearTokenChart = clearTokenChart;
+window.onTokenBarEvent = onTokenBarEvent;
+window.updateContextMax = updateContextMax;
+window.promptEditMaxTokens = promptEditMaxTokens;
 
 // 页面切换（监控、我的页面）
 window.switchPage = function(name) {
@@ -289,6 +297,9 @@ if (window.__monacoReady && window.monaco) {
     else window.logToPanel('Monaco Editor 加载失败', 'err');
   });
 }
+
+// 初始化 Token 仪表盘
+initTokenChart();
 
 connectSSE();
 updateClock();

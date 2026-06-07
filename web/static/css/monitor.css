@@ -595,6 +595,152 @@ input:focus, textarea:focus {
   gap: 10px;
 }
 
+/* --- Token 仪表盘（chat-stats 替换） --- */
+#chat-stats {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  padding: 1px 10px;
+  height: 28px;
+  flex-shrink: 0;
+  background: var(--glass-mid);
+  border-bottom: 1px solid var(--border-subtle);
+  position: relative;
+  user-select: none;
+}
+#chat-stats .cs-cost {
+  font-size: 10px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  display: flex;
+  align-items: center;
+  gap: 1px;
+  min-width: 48px;
+}
+#chat-stats .cs-cost .sf { width: 0.9em; height: 0.9em; }
+#chat-stats #cs-sparkline {
+  width: 140px;
+  height: 26px;
+  flex-shrink: 0;
+  cursor: pointer;
+  border-radius: var(--radius-sm);
+}
+#chat-stats #cs-sparkline:hover {
+  background: var(--glass-hover);
+}
+#cs-cache-bar {
+  flex: 1;
+  height: 6px;
+  min-width: 60px;
+  max-width: 160px;
+  background: rgba(255,255,255,0.06);
+  border-radius: 3px;
+  position: relative;
+  cursor: pointer;
+  overflow: visible;
+}
+#cs-cache-bar:hover { background: rgba(255,255,255,0.10); }
+#cs-cache-fill {
+  height: 100%;
+  border-radius: 3px;
+  background: linear-gradient(90deg, var(--accent), var(--success));
+  transition: width 0.3s var(--ease-out);
+  position: relative;
+}
+#cs-cache-fill.warm { background: linear-gradient(90deg, var(--warning), #f97316); }
+#cs-cache-fill.hot { background: linear-gradient(90deg, var(--danger), #dc2626); }
+#cs-cache-thumb {
+  position: absolute;
+  top: -4px;
+  width: 14px;
+  height: 14px;
+  border-radius: 50%;
+  background: var(--text-primary);
+  border: 2px solid var(--accent);
+  box-shadow: 0 0 6px var(--accent-glow);
+  cursor: grab;
+  transform: translateX(-50%);
+  transition: left 0.05s;
+  z-index: 5;
+}
+#cs-cache-thumb:active { cursor: grabbing; }
+#cs-cache-thumb.dragging { box-shadow: 0 0 12px var(--accent-glow); }
+.cs-cache-text {
+  font-size: 9.5px;
+  color: var(--text-muted);
+  white-space: nowrap;
+  min-width: 40px;
+  text-align: right;
+}
+#cs-compress-btn {
+  background: var(--glass-hover);
+  border: 1px solid var(--border-subtle);
+  color: var(--text-muted);
+  width: 22px;
+  height: 22px;
+  border-radius: var(--radius-sm);
+  font-size: 13px;
+  line-height: 1;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  padding: 0;
+  flex-shrink: 0;
+  transition: all var(--duration-fast);
+}
+#cs-compress-btn:hover {
+  background: var(--glass-active);
+  color: var(--text-primary);
+  box-shadow: 0 0 10px var(--accent-glow);
+}
+
+/* --- Token 仪表盘悬浮卡片 --- */
+#cs-tooltip {
+  position: absolute;
+  bottom: 30px;
+  left: 50%;
+  transform: translateX(-50%);
+  background: var(--glass-pop);
+  backdrop-filter: blur(var(--blur-popup)) saturate(1.5);
+  -webkit-backdrop-filter: blur(var(--blur-popup)) saturate(1.5);
+  border: 1px solid var(--border-strong);
+  border-radius: var(--radius-md);
+  padding: 10px 14px;
+  min-width: 200px;
+  max-width: 260px;
+  z-index: 1000;
+  box-shadow: 0 8px 32px rgba(0,0,0,0.5);
+  animation: fadeIn 0.15s var(--ease-out);
+  pointer-events: none;
+  white-space: nowrap;
+}
+#cs-tooltip .tt-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 14px;
+  font-size: 11px;
+  padding: 2px 0;
+  color: var(--text-secondary);
+}
+#cs-tooltip .tt-row .tt-val {
+  color: var(--text-primary);
+  font-weight: 500;
+}
+#cs-tooltip .tt-sep {
+  border: none;
+  border-top: 1px solid var(--border-subtle);
+  margin: 4px 0;
+}
+#cs-tooltip .tt-title {
+  font-size: 10px;
+  font-weight: 600;
+  color: var(--text-muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+  margin-bottom: 4px;
+}
+
 /* --- 聊天消息区 --- */
 #chat-messages {
   flex: 1;

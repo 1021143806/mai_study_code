@@ -107,6 +107,23 @@ export function connectSSE() {
       const chatStatus = document.getElementById('conn-status-chat');
       if (chatDot) chatDot.style.background = 'var(--success)';
       if (chatStatus) chatStatus.textContent = '已连接';
+
+      // 从 stats 同步 token 数据
+      if (stats.context) {
+        const usedEl = document.getElementById('st-ctx-used');
+        const maxEl = document.getElementById('st-ctx-max');
+        if (usedEl) usedEl.textContent = stats.context.context_tokens_estimate || 0;
+        // 同步 context_max_tokens 到 token 仪表盘
+        if (stats.context.context_max_tokens && window.updateContextMax) {
+          window.updateContextMax(stats.context.context_max_tokens);
+        }
+      }
+      const execEl = document.getElementById('st-exec');
+      if (execEl && stats.sandbox) execEl.textContent = stats.sandbox.total || 0;
+      const cacheEl = document.getElementById('st-cache');
+      if (cacheEl && stats.cache) cacheEl.textContent = stats.cache.active_entries || 0;
+      const hitEl = document.getElementById('st-hit');
+      if (hitEl && stats.cache) hitEl.textContent = stats.cache.total_hits || 0;
     } catch (err) {}
   });
 
@@ -116,6 +133,15 @@ export function connectSSE() {
       const msg = event.data?.message || '';
       if (msg) {
         window.addAssistantLog('📢 ' + msg);
+      }
+    } catch (err) {}
+  });
+
+  es.addEventListener('token_bar', (e) => {
+    try {
+      const data = JSON.parse(e.data);
+      if (window.onTokenBarEvent) {
+        window.onTokenBarEvent(data);
       }
     } catch (err) {}
   });

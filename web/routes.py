@@ -64,6 +64,8 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
     app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
     app.router.add_post("/api/chat", lambda r: _handle_chat(r, plugin))
+    app.router.add_post("/api/token/compress", lambda r: _handle_token_compress(r, plugin))
+    app.router.add_post("/api/token/max-tokens", lambda r: _handle_token_max_tokens(r, plugin))
 
     # 工作区 API
     app.router.add_get("/api/workspaces", lambda r: _handle_workspaces_list(r, plugin))
@@ -700,6 +702,11 @@ async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> we
         all_tool_results = []
         final_response = ""
         model = ""
+        _token_pricing = getattr(plugin.config, '_token_pricing', {
+            "input_price_per_1k": 0.001,
+            "output_price_per_1k": 0.002,
+            "cache_hit_price_per_1k": 0.0001,
+        })
 
         for _round in range(3):
             import asyncio as _wait
@@ -714,6 +721,31 @@ async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> we
                 )
             except _wait.TimeoutError:
                 result = {"response": "（生成超时）", "tool_calls": [], "error": "timeout"}
+
+            # ── Token 统计与 SSE 推送 ──
+            prompt_tokens = int(result.get("prompt_tokens", 0) or 0)
+            completion_tokens = int(result.get("completion_tokens", 0) or 0)
+            total_tokens = prompt_tokens + completion_tokens
+            cache_hit_tokens = int(result.get("cache_hit_tokens", 0) or 0)
+            if prompt_tokens > 0 and total_tokens > 0:
+                input_cost = (prompt_tokens / 1000) * _token_pricing["input_price_per_1k"]
+                output_cost = (completion_tokens / 1000) * _token_pricing["output_price_per_1k"]
+                cost = round(input_cost + output_cost, 6)
+                bar_data = {
+                    "prompt_tokens": prompt_tokens,
+                    "completion_tokens": completion_tokens,
+                    "total_tokens": total_tokens,
+                    "cache_hit_tokens": cache_hit_tokens,
+                    "cost": cost,
+                    "label": "对话",
+                    "model": model or result.get("model", ""),
+                }
+                # 记录到插件统计缓存
+                plugin.record_token_bar(bar_data)
+                # 通过 SSE 推送到前端
+                if plugin._event_bus:
+                    plugin._event_bus.publish("token_bar", bar_data)
+
             response_text = result.get("response", "") or result.get("content", "")
             model = result.get("model", model)
             tool_calls = result.get("tool_calls", []) or []
@@ -1367,3 +1399,120 @@ def _build_file_tree(base_path: str, workspace_dir: str) -> list:
         tree.append(node)
 
     return tree
+
+
+async def _handle_token_compress(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """手动触发缓存压缩。
+
+    Body (JSON) 可选:
+        threshold: 压缩阈值百分比（可选，仅调整不压缩）。
+        compress: 是否执行压缩（默认 true）。
+    """
+    import asyncio as _asyncio
+
+    try:
+        body = await request.json()
+    except Exception:
+        body = {}
+
+    do_compress = bool(body.get("compress", True))
+
+    if do_compress and plugin._cache:
+        # 记录压缩前状态
+        before = plugin._cache.estimate_tokens(plugin._cache._context_turns)
+        # 执行上下文裁剪：丢弃最旧轮次直到低于 50% 水位
+        max_tokens = plugin._cache._context_max_tokens
+        target = max_tokens // 2
+        removed = 0
+        while plugin._cache._context_turns and plugin._cache.estimate_tokens(plugin._cache._context_turns) > target:
+            if len(plugin._cache._context_turns) >= 2:
+                plugin._cache._context_turns.pop(0)
+                plugin._cache._context_turns.pop(0)
+                removed += 1
+            else:
+                plugin._cache._context_turns.pop(0)
+                removed += 1
+
+        after = plugin._cache.estimate_tokens(plugin._cache._context_turns)
+        freed = before - after
+
+        # 发布事件
+        if plugin._event_bus:
+            plugin._event_bus.publish("log", {
+                "message": f"🧹 上下文压缩完成，释放 {freed} tok（{removed} 轮次）",
+                "level": "info",
+            })
+
+        return web.json_response({
+            "success": True,
+            "freed": max(freed, 0),
+            "remaining": after,
+            "removed_rounds": removed,
+        })
+
+    # 仅查询状态
+    used = plugin._cache.estimate_tokens(plugin._cache._context_turns) if plugin._cache else 0
+    max_ctx = plugin._cache._context_max_tokens if plugin._cache else 8000
+    return web.json_response({
+        "success": True,
+        "compress": False,
+        "used": used,
+        "max": max_ctx,
+    })
+
+
+async def _handle_token_max_tokens(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
+    """更新上下文最大 token 数并持久化到 config.toml。
+
+    Body (JSON):
+        max_tokens: int — 新的上限值。
+    """
+    try:
+        body = await request.json()
+    except Exception:
+        return web.json_response({"success": False, "error": "请求体不是有效 JSON"}, status=400)
+
+    new_max = int(body.get("max_tokens", 0) or 0)
+    if new_max < 512 or new_max > 1048576:
+        return web.json_response({"success": False, "error": "max_tokens 必须在 512 ~ 1048576 之间"}, status=400)
+
+    # 更新 config.toml
+    import os as _os
+    import tomllib as _tomllib
+    import tomlkit as _tomlkit
+
+    plugin_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
+    config_path = _os.path.join(plugin_dir, "config.toml")
+
+    try:
+        with open(config_path, "r", encoding="utf-8") as f:
+            doc = _tomlkit.load(f)
+        doc.setdefault("cache", {})["context_max_tokens"] = new_max
+        with open(config_path, "w", encoding="utf-8") as f:
+            f.write(_tomlkit.dumps(doc))
+    except Exception as e:
+        return web.json_response({"success": False, "error": f"写入配置失败: {e}"}, status=500)
+
+    # 更新运行时缓存配置
+    current_config = plugin.get_plugin_config_data()
+    if "cache" in current_config and isinstance(current_config["cache"], dict):
+        current_config["cache"]["context_max_tokens"] = new_max
+    # 如果插件实例有 _cache，直接设置上限
+    if plugin._cache:
+        plugin._cache._context_max_tokens = new_max
+
+    # 热重载插件配置
+    try:
+        await plugin.ctx.config.reload("self", plugin_id=plugin.ctx.plugin_id)
+    except Exception:
+        pass  # 即使重载失败也不影响已写入的配置
+
+    logger.info(f"上下文最大 token 已更新为 {new_max}")
+
+    if plugin._event_bus:
+        plugin._event_bus.publish("log", {
+            "message": f"⚙️ 上下文上限已更新为 {new_max} tok",
+            "level": "info",
+        })
+
+    return web.json_response({"success": True, "max_tokens": new_max})

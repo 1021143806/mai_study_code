@@ -110,11 +110,19 @@
       </div>
     </div>
     <div id="chat-cwd" style="padding:3px 14px;font-size:10px;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);flex-shrink:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis"></div>
-    <div id="chat-stats" style="display:flex;gap:10px;padding:2px 14px;font-size:9.5px;color:var(--text-muted);border-bottom:1px solid var(--border-subtle);flex-shrink:0;white-space:nowrap;overflow-x:auto">
-      <span title="已用 Token / 上限">🧠 <span id="st-ctx-used">0</span>/<span id="st-ctx-max">8K</span></span>
-      <span title="缓存条目">💾 <span id="st-cache">0</span>/<span id="st-cache-max">500</span></span>
-      <span title="缓存命中率" id="st-hit-row" style="display:none">🎯 <span id="st-hit">0</span>%</span>
-      <span title="沙箱执行次数">⚡ <span id="st-exec">0</span></span>
+    <div id="chat-stats">
+      <span class="cs-cost">💰<span id="cs-cost-val">0.00</span></span>
+      <canvas id="cs-sparkline" width="140" height="26"></canvas>
+      <div id="cs-cache-bar">
+        <div id="cs-cache-fill"></div>
+        <div id="cs-cache-thumb"></div>
+      </div>
+      <span class="cs-cache-text"><span id="cs-used">0</span>/<span id="cs-max">8</span>K</span>
+      <button id="cs-compress-btn" title="压缩上下文">↻</button>
+      <!-- 悬浮卡片 -->
+      <div id="cs-tooltip" style="display:none">
+        <div id="cs-tooltip-body"></div>
+      </div>
     </div>
     <div id="chat-messages"></div>
     <div id="chat-input">

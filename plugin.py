@@ -327,14 +327,26 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         self._knowledge_base: Optional[KnowledgeBase] = None
         self._style_hint: str = ""  # 从 bot_config 动态读取的风格提示
         self._workspace_dir: str = ""
+        self._file_ops: Optional[FileOperator] = None
+        self._shell_executor: Optional[ShellExecutor] = None
+        self._emergency_stop: bool = False  # 紧急停止标志
+        self._pending_operations: List[Dict[str, Any]] = []  # 待确认的操作
+        # Web 服务
+        self._event_bus: Optional[EventBus] = None
+        self._web_server: Optional[PluginWebServer] = None
+        self._web_port: int = 0
         self._sandbox_stats: Dict[str, Any] = {}
-        self._stats_path: str = ""
         self._start_time: float = 0.0
-        # 工作区管理器
-        self._workspace_manager: Optional[WorkspaceManager] = None
         # 调试日志
         self._debug_logger: Optional[Any] = None
         self._last_cache_status_time: float = 0.0
+        # Token 统计
+        self._token_stats: Dict[str, Any] = {
+            "total_prompt_tokens": 0,
+            "total_completion_tokens": 0,
+            "total_cost": 0.0,
+            "bars": [],  # 最近 token_bar 记录，用于 sparkline
+        }
 
     async def on_load(self) -> None:
         """插件加载时初始化。"""
@@ -1715,6 +1727,28 @@ class MaiStudyCodePlugin(MaiBotPlugin):
             except Exception:
                 pass
 
+    def record_token_bar(self, data: Dict[str, Any]) -> None:
+        """记录一次 token_bar 事件到统计缓存。
+
+        Args:
+            data: token_bar 事件数据，含 prompt_tokens/completion_tokens/total_tokens/cost/label。
+        """
+        stats = self._token_stats
+        stats["total_prompt_tokens"] = stats.get("total_prompt_tokens", 0) + data.get("prompt_tokens", 0)
+        stats["total_completion_tokens"] = stats.get("total_completion_tokens", 0) + data.get("completion_tokens", 0)
+        stats["total_cost"] = round(stats.get("total_cost", 0) + data.get("cost", 0), 6)
+        bars = stats.get("bars", [])
+        bars.append({
+            "total_tokens": data.get("total_tokens", 0),
+            "cost": data.get("cost", 0),
+            "label": data.get("label", ""),
+            "timestamp": time.time(),
+        })
+        # 保留最近 50 条
+        if len(bars) > 50:
+            bars[:] = bars[-50:]
+        stats["bars"] = bars
+
     def collect_stats(self) -> Dict[str, Any]:
         """收集所有模块的统计信息，供监控面板使用。
 
@@ -1749,6 +1783,7 @@ class MaiStudyCodePlugin(MaiBotPlugin):
                 "port": self._web_port,
                 "uptime_seconds": round(time.time() - self._start_time, 1) if self._start_time else 0,
             },
+            "token": self._token_stats,
         }
 
 
