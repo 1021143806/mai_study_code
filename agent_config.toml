@@ -1,0 +1,47 @@
+# mai_study_code 独立进程配置文件
+# 存放于插件目录，由 main.py 读取
+
+debug = false
+host = "127.0.0.1"
+port = 0                      # 0 = 随机端口，固定端口可指定
+granted_level = "root"        # 默认权限等级
+
+[llm]
+api_key = "sk-xxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxxx"
+base_url = "https://api.deepseek.com/v1"
+model = "deepseek-chat"
+max_tokens = 4000
+temperature = 0.1
+timeout = 30
+
+[modules.sandbox]
+max_memory_mb = 128
+max_timeout_sec = 15
+max_output_chars = 10000
+
+[modules.cache]
+enabled = true
+max_entries = 500
+ttl_seconds = 1800
+
+[modules.risk]
+require_confirmation_medium = true
+require_confirmation_high = true
+block_critical = true
+
+[modules.learner]
+enabled = true
+auto_save_notes = false
+knowledge_dir = "knowledge"
+
+[modules.web]
+host = "127.0.0.1"
+port = 0
+auto_refresh_sec = 30
+mai_study_code_plugin_url = ""
+
+[modules.debug_log]
+enabled = false
+log_file = "workspace/debug.log"
+max_file_size_mb = 5
+backup_count = 2

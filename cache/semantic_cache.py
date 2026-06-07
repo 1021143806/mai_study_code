@@ -1,16 +1,8 @@
 """代码执行缓存管理模块。
 
-设计原则（对齐 DeepSeek 硬盘缓存机制）：
+设计原则：
 - 本地精确结果缓存：相同代码+相同问题直接返回，0 token 消耗
-- 消息前缀规范：构建 messages 时保持前缀一致，利用 API 端前缀缓存
-- 话题感知清理：检测话题切换时批量清理旧缓存
-- 上下文窗口管理：超出时丢弃最旧轮次，不调 LLM 压缩（压缩本身也烧 token）
-
-DeepSeek 前缀缓存说明：
-  API 端自动对 messages 数组做前缀匹配。只要前面部分不变，
-  重复的前缀就不重复计费。我们只需保证构建 messages 时把
-  不变的内容（system prompt、代码上下文）放前面，
-  变化的内容（用户新问题）放最后。
+- WebUI 对话缓存：管理同一工作区的消息前缀，最大化 DeepSeek 硬盘缓存命中率
 """
 
 from typing import Any, Dict, List, Optional, Tuple
@@ -31,13 +23,11 @@ class CacheEntry:
         code: str,
         question: str,
         result: Any,
-        topic: str = "",
         ttl_seconds: int = 1800,
     ) -> None:
         self.code = code
         self.question = question
         self.result = result
-        self.topic = topic
         self.created_at = time.time()
         self.last_hit_at = time.time()
         self.ttl_seconds = ttl_seconds
@@ -64,39 +54,30 @@ class CodeCache:
 
     两层设计：
     1. 本地精确缓存：相同(code, question) → 直接返回结果
-    2. 消息构建辅助：确保 messages 前缀一致以利用 API 缓存
+    2. 对话消息前缀缓存：同一工作区对话复用前缀，最大化 DeepSeek 硬盘缓存
 
     清理策略：
     - TTL 过期自动淘汰
-    - LRU 容量淘汰
-    - 话题切换感知清理
-    - 麦麦可主动调用清理命令
     """
 
     def __init__(
         self,
         max_entries: int = 500,
         default_ttl_seconds: int = 1800,
-        context_max_tokens: int = 8000,
     ) -> None:
         """初始化缓存。
 
         Args:
             max_entries: 最大缓存条目数。
             default_ttl_seconds: 默认过期时间（秒），默认 30 分钟。
-            context_max_tokens: 上下文窗口最大 token 数（估算）。
         """
         self._cache: Dict[str, CacheEntry] = {}
         self._max_entries = max_entries
         self._default_ttl = default_ttl_seconds
-        self._context_max_tokens = context_max_tokens
 
-        # 话题追踪
-        self._current_topic: str = ""
-        self._topic_hints: List[str] = []  # 最近的关键词，用于话题切换检测
-
-        # 上下文窗口管理
-        self._context_turns: List[Dict[str, str]] = []  # 最近的对话轮次
+        # 对话消息前缀缓存：按工作区名称存储最近一次构建的消息列表
+        # 用于在 WebUI 对话中复用固定前缀以利用 DeepSeek 硬盘缓存
+        self._workspace_message_prefixes: Dict[str, List[Dict[str, Any]]] = {}
 
     # ================================================================
     # 本地精确缓存
@@ -148,7 +129,6 @@ class CodeCache:
         code: str,
         question: str,
         result: Any,
-        topic: str = "",
         ttl_seconds: Optional[int] = None,
     ) -> None:
         """写入本地缓存。
@@ -157,7 +137,6 @@ class CodeCache:
             code: Python 代码。
             question: 用户问题。
             result: 执行结果。
-            topic: 所属话题。
             ttl_seconds: 过期时间，默认使用配置值。
         """
         if ttl_seconds is None:
@@ -180,216 +159,62 @@ class CodeCache:
             code=code,
             question=question,
             result=result,
-            topic=topic or self._current_topic,
             ttl_seconds=ttl_seconds,
         )
 
     # ================================================================
-    # 消息构建辅助（利用 API 前缀缓存）
+    # 对话消息前缀缓存（WebUI 对话用）
     # ================================================================
 
-    def build_messages(
+    def cache_message_prefix(
         self,
-        system_prompt: str,
-        code_context: str,
-        user_question: str,
-        history: Optional[List[Dict[str, str]]] = None,
-    ) -> List[Dict[str, str]]:
-        """构建 messages 数组，保持前缀一致以利用 API 缓存。
+        workspace: str,
+        messages: List[Dict[str, Any]],
+    ) -> None:
+        """缓存指定工作区的消息列表。
 
-        前缀结构（固定顺序）：
-        [system] → [代码上下文] → [历史对话...] → [当前问题]
-
-        DeepSeek 会对这个数组做前缀匹配。只要 system + 代码上下文
-        不变，前面的 token 就不重复计费。
+        存储最近一次成功构建的完整消息列表，下一轮请求中，
+        如果前缀（system prompt + 工作区上下文）不变，
+        可以直接复用前半部分，确保 DeepSeek 硬盘缓存命中。
 
         Args:
-            system_prompt: 系统提示词。
-            code_context: 当前代码上下文（正在讨论的代码）。
-            user_question: 用户当前问题。
-            history: 历史对话轮次。
-
-        Returns:
-            List[Dict[str, str]]: messages 数组。
+            workspace: 工作区名称。
+            messages: 完整的消息列表。
         """
-        messages: List[Dict[str, str]] = []
+        self._workspace_message_prefixes[workspace] = list(messages)
 
-        # 第1部分：system prompt（固定前缀）
-        messages.append({"role": "system", "content": system_prompt})
-
-        # 第2部分：代码上下文（固定前缀，代码不变则命中）
-        if code_context:
-            messages.append(
-                {
-                    "role": "user",
-                    "content": f"当前正在讨论的代码：\n```python\n{code_context}\n```",
-                }
-            )
-
-        # 第3部分：历史对话（可能变化，但最近的轮次保持稳定）
-        if history:
-            messages.extend(history)
-
-        # 第4部分：当前问题（变化部分，放在最后）
-        messages.append({"role": "user", "content": user_question})
-
-        return messages
-
-    def estimate_tokens(self, messages: List[Dict[str, str]]) -> int:
-        """估算 messages 的 token 数量。
-
-        粗略估算：中文约 1.5 字符/token，英文约 4 字符/token。
+    def get_message_prefix(
+        self,
+        workspace: str,
+    ) -> List[Dict[str, Any]]:
+        """获取指定工作区最近一次缓存的消息列表。
 
         Args:
-            messages: messages 数组。
+            workspace: 工作区名称。
 
         Returns:
-            int: 估算的 token 数。
+            List[Dict[str, Any]]: 缓存的消息列表，不存在时返回空列表。
         """
-        total_chars = sum(len(m.get("content", "")) for m in messages)
-        # 保守估算：2 字符/token
-        return total_chars // 2
+        return list(self._workspace_message_prefixes.get(workspace, []))
 
-    # ================================================================
-    # 上下文窗口管理
-    # ================================================================
+    def invalidate_workspace_prefix(self, workspace: str) -> None:
+        """清除指定工作区的消息前缀缓存。
 
-    def add_context_turn(self, user_msg: str, assistant_msg: str) -> None:
-        """添加一轮对话到上下文窗口。
+        工作区切换或配置变更时调用。
 
         Args:
-            user_msg: 用户消息。
-            assistant_msg: 助手回复。
+            workspace: 工作区名称。
         """
-        self._context_turns.append(
-            {"role": "user", "content": user_msg}
-        )
-        self._context_turns.append(
-            {"role": "assistant", "content": assistant_msg}
-        )
-
-        # 超出窗口则丢弃最旧的轮次
-        self._trim_context()
-
-    def get_context_history(self) -> List[Dict[str, str]]:
-        """获取当前上下文窗口内的对话历史。
-
-        Returns:
-            List[Dict[str, str]]: 对话历史。
-        """
-        return list(self._context_turns)
-
-    def _trim_context(self) -> None:
-        """裁剪上下文窗口。
-
-        当估算 token 数超出限制时，从最旧的消息开始丢弃。
-        不调用 LLM 压缩（压缩本身也消耗 token）。
-        """
-        while (
-            self._context_turns
-            and self.estimate_tokens(self._context_turns) > self._context_max_tokens
-        ):
-            # 每次丢弃最旧的一轮（2条消息）
-            if len(self._context_turns) >= 2:
-                self._context_turns.pop(0)  # user
-                self._context_turns.pop(0)  # assistant
-            else:
-                self._context_turns.pop(0)
-
-    def reset_context(self) -> None:
-        """重置上下文窗口（话题切换时调用）。"""
-        self._context_turns.clear()
-
-    # ================================================================
-    # 话题感知清理
-    # ================================================================
-
-    def update_topic(self, keywords: List[str]) -> bool:
-        """更新当前话题关键词，检测是否发生话题切换。
-
-        Args:
-            keywords: 当前消息的关键词列表。
-
-        Returns:
-            bool: 是否发生了话题切换。
-        """
-        if not self._topic_hints:
-            self._topic_hints = keywords
-            return False
-
-        # 简单的话题切换检测：关键词重叠度
-        old_set = set(self._topic_hints)
-        new_set = set(keywords)
-
-        if old_set and new_set:
-            overlap = len(old_set & new_set) / max(len(old_set | new_set), 1)
-            if overlap < 0.3:  # 重叠度低于 30%，认为话题切换
-                self._on_topic_switch()
-                self._topic_hints = keywords
-                return True
-
-        # 更新话题提示（保留最近的关键词）
-        self._topic_hints = list(set(self._topic_hints[-10:] + keywords))
-        return False
-
-    def _on_topic_switch(self) -> None:
-        """话题切换时的处理。
-
-        清理旧话题的缓存和上下文。
-        """
-        # 清理旧话题的本地缓存
-        if self._current_topic:
-            self.invalidate_by_topic(self._current_topic)
-
-        # 重置上下文窗口
-        self.reset_context()
-
-    def invalidate_by_topic(self, topic: str) -> int:
-        """按话题清理缓存。
-
-        Args:
-            topic: 话题标识。
-
-        Returns:
-            int: 清理的条目数。
-        """
-        to_remove = [
-            key
-            for key, entry in self._cache.items()
-            if entry.topic == topic
-        ]
-        for key in to_remove:
-            del self._cache[key]
-        return len(to_remove)
+        self._workspace_message_prefixes.pop(workspace, None)
 
     # ================================================================
     # 通用缓存管理
     # ================================================================
 
-    def invalidate_by_code(self, code_prefix: str) -> int:
-        """按代码前缀清理缓存（代码被修改时调用）。
-
-        Args:
-            code_prefix: 代码前缀。
-
-        Returns:
-            int: 清理的条目数。
-        """
-        to_remove = [
-            key
-            for key, entry in self._cache.items()
-            if entry.code.startswith(code_prefix)
-        ]
-        for key in to_remove:
-            del self._cache[key]
-        return len(to_remove)
-
     def clear(self) -> None:
-        """清空所有缓存和上下文。"""
+        """清空所有缓存。"""
         self._cache.clear()
-        self._context_turns.clear()
-        self._topic_hints.clear()
-        self._current_topic = ""
+        self._workspace_message_prefixes.clear()
 
     def clear_expired(self) -> int:
         """清理所有过期条目。
@@ -413,7 +238,6 @@ class CodeCache:
         total = len(self._cache)
         expired = sum(1 for e in self._cache.values() if e.is_expired)
         total_hits = sum(e.hit_count for e in self._cache.values())
-        context_tokens = self.estimate_tokens(self._context_turns)
 
         return {
             "total_entries": total,
@@ -422,10 +246,7 @@ class CodeCache:
             "max_entries": self._max_entries,
             "total_hits": total_hits,
             "default_ttl_seconds": self._default_ttl,
-            "context_turns": len(self._context_turns) // 2,
-            "context_tokens_estimate": context_tokens,
-            "context_max_tokens": self._context_max_tokens,
-            "current_topic": self._current_topic,
+            "cached_workspaces": len(self._workspace_message_prefixes),
         }
 
     def _evict_lru(self) -> None:

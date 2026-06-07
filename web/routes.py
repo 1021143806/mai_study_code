@@ -64,8 +64,6 @@ def setup_routes(app: web.Application, plugin: "MaiStudyCodePlugin") -> None:
     app.router.add_post("/api/execute", lambda r: _handle_execute(r, plugin))
     app.router.add_post("/api/reload", lambda r: _handle_reload(r, plugin))
     app.router.add_post("/api/chat", lambda r: _handle_chat(r, plugin))
-    app.router.add_post("/api/token/compress", lambda r: _handle_token_compress(r, plugin))
-    app.router.add_post("/api/token/max-tokens", lambda r: _handle_token_max_tokens(r, plugin))
 
     # 工作区 API
     app.router.add_get("/api/workspaces", lambda r: _handle_workspaces_list(r, plugin))
@@ -587,8 +585,7 @@ async def _handle_reload(request: web.Request, plugin: "MaiStudyCodePlugin") -> 
 async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
     """Claude Code 风格对话（支持读写文件、执行代码）。
 
-    Body (JSON):
-        messages: 消息列表 [{role, content}, ...]
+    委托给 agent/AgentLoop 处理，routes.py 只做 HTTP 层。
     """
     try:
         body = await request.json()
@@ -599,375 +596,93 @@ async def _handle_chat(request: web.Request, plugin: "MaiStudyCodePlugin") -> we
     if not messages or not isinstance(messages, list):
         return web.json_response({"error": "缺少 messages 或格式错误"}, status=400)
 
-    # 接收前端传入的当前工作目录（相对路径，相对于工作区根）
+    # 接收前端传入的当前工作目录
     cwd = str(body.get("cwd", "") or "").strip()
-    # 防止路径遍历
     if ".." in cwd:
         cwd = ""
 
-    # 根据权限等级筛选可用工具
     granted_level = str(plugin.config.permissions.granted_level)
-    level_names = {
-        "0": "游客", "1": "访客", "2": "开发者",
-        "3": "管理员", "4": "超级用户", "root": "超级用户",
-    }
 
-    # 等级 → 可用工具映射
-    _all_tools = {
-        "read_file": {
-            "type": "function",
-            "function": {
-                "name": "read_file",
-                "description": "读取文件内容。如果路径是目录会自动列出目录内容。",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件或目录路径（相对于当前目录）"}}, "required": ["path"]}
-            }
-        },
-        "list_dir": {
-            "type": "function",
-            "function": {
-                "name": "list_dir",
-                "description": "列出指定目录下的文件和子目录",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目录路径（相对于当前目录，省略则列出当前目录）"}}, "required": []}
-            }
-        },
-        "write_file": {
-            "type": "function",
-            "function": {
-                "name": "write_file",
-                "description": "创建或覆盖工作区文件",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "文件路径"}, "content": {"type": "string", "description": "文件内容"}}, "required": ["path", "content"]}
-            }
-        },
-        "execute_code": {
-            "type": "function",
-            "function": {
-                "name": "execute_code",
-                "description": "在沙箱中执行 Python 代码并返回结果",
-                "parameters": {"type": "object", "properties": {"code": {"type": "string", "description": "Python 代码"}}, "required": ["code"]}
-            }
-        },
-        "create_dir": {
-            "type": "function",
-            "function": {
-                "name": "create_dir",
-                "description": "创建工作区内的目录",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目录路径（相对于当前目录）"}}, "required": ["path"]}
-            }
-        },
-        "change_dir": {
-            "type": "function",
-            "function": {
-                "name": "change_dir",
-                "description": "切换当前工作目录到指定的子目录。后续读写文件操作将基于新目录。",
-                "parameters": {"type": "object", "properties": {"path": {"type": "string", "description": "目标目录路径（相对于当前目录，使用 .. 返回上级）"}}, "required": ["path"]}
-            }
-        },
-    }
-    # 各等级可用的工具名
-    _level_tools = {
-        "0": [],
-        "1": ["read_file"],
-        "2": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
-        "3": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
-        "4": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
-        "root": ["read_file", "write_file", "execute_code", "create_dir", "change_dir", "list_dir"],
-    }
-    allowed = _level_tools.get(granted_level, ["read_file"])
-    tools = [_all_tools[name] for name in allowed]
+    # 委托 AgentLoop 处理
+    from ..agent import AgentLoop
 
-    # 获取工作区根路径
-    ws_root = ""
-    ws_mgr = plugin._workspace_manager
-    if ws_mgr:
-        active_ws = ws_mgr.get_active_workspace()
-        if active_ws:
-            ws_root = active_ws.to_dict().get("path", "") or ""
+    agent = AgentLoop(plugin)
+    result = await agent.run(messages, cwd, granted_level)
 
-    try:
-        # 注入当前工作目录上下文
-        enhanced_messages = list(messages)
-        if ws_root:
-            context = f"当前工作目录: {ws_root}"
-            if cwd:
-                context = f"当前工作目录: {ws_root}/{cwd}\n你位于 {cwd} 子目录中。"
-                context += "\n读写文件时路径相对于当前目录。使用 change_dir 切换目录，使用 .. 返回上级。"
-            else:
-                context += "\n你位于工作区根目录。读写文件时使用相对于此目录的路径。"
-            enhanced_messages.insert(0, {
-                "role": "system",
-                "content": context,
-            })
+    # 保存聊天记录
+    _save_chat_history(messages, cwd, plugin)
 
-        # 工具执行循环：最多 3 轮，整体限时 60 秒
-        all_tool_results = []
-        final_response = ""
-        model = ""
-        _token_pricing = getattr(plugin.config, '_token_pricing', {
-            "input_price_per_1k": 0.001,
-            "output_price_per_1k": 0.002,
-            "cache_hit_price_per_1k": 0.0001,
-        })
+    # 流式传输支持
+    if body.get("stream"):
+        return await _stream_chat_response(request, result)
 
-        for _round in range(3):
-            import asyncio as _wait
-            try:
-                result = await _wait.wait_for(
-                    plugin.ctx.llm.generate_with_tools(
-                        prompt=enhanced_messages,
-                        tools=tools,
-                        model="replyer",
-                    ),
-                    timeout=25,
+    # 非流式：返回完整 JSON
+    return web.json_response({
+        "success": True,
+        "response": result.get("response", ""),
+        "model": result.get("model", ""),
+        "tool_results": result.get("tool_results", []),
+        "level": granted_level,
+        "level_name": result.get("level_name", ""),
+        "cwd": result.get("cwd", cwd),
+        "ws_root": result.get("ws_root", ""),
+    })
+
+
+async def _stream_chat_response(
+    request: web.Request,
+    result: Dict[str, Any],
+) -> web.StreamResponse:
+    """流式输出智能体对话结果。"""
+    import asyncio as _asyncio
+
+    resp = web.StreamResponse(
+        status=200,
+        reason="OK",
+        headers={
+            "Content-Type": "text/event-stream",
+            "Cache-Control": "no-cache",
+            "Connection": "keep-alive",
+            "X-Accel-Buffering": "no",
+        },
+    )
+    await resp.prepare(request)
+
+    # 发送工具结果事件
+    for tr in result.get("tool_results", []):
+        line = f"event: tool\ndata: {json.dumps(tr, ensure_ascii=False)}\n\n"
+        await resp.write(line.encode("utf-8"))
+
+    # 流式发送文本回复
+    final_response = result.get("response", "")
+    if final_response:
+        text = final_response
+        chunks = text.split(" ")
+        buf = ""
+        for chunk in chunks:
+            buf += chunk + " "
+            if len(buf) >= 30:
+                await resp.write(
+                    f"event: text\ndata: {buf}\n\n".encode("utf-8")
                 )
-            except _wait.TimeoutError:
-                result = {"response": "（生成超时）", "tool_calls": [], "error": "timeout"}
-
-            # ── Token 统计与 SSE 推送 ──
-            prompt_tokens = int(result.get("prompt_tokens", 0) or 0)
-            completion_tokens = int(result.get("completion_tokens", 0) or 0)
-            total_tokens = prompt_tokens + completion_tokens
-            cache_hit_tokens = int(result.get("cache_hit_tokens", 0) or 0)
-            if prompt_tokens > 0 and total_tokens > 0:
-                input_cost = (prompt_tokens / 1000) * _token_pricing["input_price_per_1k"]
-                output_cost = (completion_tokens / 1000) * _token_pricing["output_price_per_1k"]
-                cost = round(input_cost + output_cost, 6)
-                bar_data = {
-                    "prompt_tokens": prompt_tokens,
-                    "completion_tokens": completion_tokens,
-                    "total_tokens": total_tokens,
-                    "cache_hit_tokens": cache_hit_tokens,
-                    "cost": cost,
-                    "label": "对话",
-                    "model": model or result.get("model", ""),
-                }
-                # 记录到插件统计缓存
-                plugin.record_token_bar(bar_data)
-                # 通过 SSE 推送到前端
-                if plugin._event_bus:
-                    plugin._event_bus.publish("token_bar", bar_data)
-
-            response_text = result.get("response", "") or result.get("content", "")
-            model = result.get("model", model)
-            tool_calls = result.get("tool_calls", []) or []
-
-            if response_text and not tool_calls:
-                # 纯文本回复，没有需要执行的工具 → 这就是最终回复
-                final_response = response_text
-                break
-
-            # 有工具调用：暂存本轮文本（如果有），后续会被最终回复覆盖
-            if response_text:
-                final_response = response_text
-
-            if not tool_calls:
-                break
-
-            # 执行工具
-            ws = plugin._workspace_manager
-            ws_name = ws.get_active() if ws else ""
-            round_results = []
-
-            for tc in tool_calls:
-                func_name = tc.get("function", {}).get("name", "") if isinstance(tc, dict) else getattr(tc, "func_name", "")
-                args_raw = tc.get("function", {}).get("arguments", "{}") if isinstance(tc, dict) else "{}"
-                try:
-                    if isinstance(args_raw, str):
-                        import json as _json
-                        args = _json.loads(args_raw)
-                    else:
-                        args = args_raw
-                except Exception:
-                    args = {}
-
-                def _resolve(p: str) -> str:
-                    if not p or p.startswith("/") or "../" in p.replace("\\", "/"):
-                        return p
-                    return f"{cwd}/{p}" if cwd else p
-
-                result_entry = {"tool": func_name, "input": "", "output": "", "success": False}
-
-                try:
-                    if func_name == "read_file" or func_name == "list_dir":
-                        path = args.get("path", "") if func_name == "list_dir" else _resolve(args.get("path", ""))
-                        if not path:
-                            path = cwd or "."
-                        else:
-                            path = _resolve(path)
-                        result_entry["input"] = path
-                        if ws:
-                            fr = ws.read_file(path, workspace=ws_name)
-                            if not fr.get("success") and "不存在" in str(fr.get("error", "")):
-                                dir_list = ws.list_files(path, workspace=ws_name)
-                                if dir_list.get("success"):
-                                    tree = dir_list.get("tree", [])
-                                    lines = [f"{'📁' if n.get('is_dir') else '📄'} {n['name']}" for n in tree]
-                                    result_entry["output"] = "\n".join(lines) if lines else "(空目录)"
-                                    result_entry["success"] = True
-                                else:
-                                    result_entry["output"] = fr.get("error", "文件不存在")
-                            else:
-                                result_entry["output"] = fr.get("content", fr.get("error", "未知错误"))[:3000]
-                                result_entry["success"] = fr.get("success", False)
-                        else:
-                            result_entry["output"] = "工作区未初始化"
-
-                    elif func_name == "write_file":
-                        path = _resolve(args.get("path", ""))
-                        content = args.get("content", "")
-                        result_entry["input"] = f"{path} ({len(content)} chars)"
-                        if ws:
-                            fr = ws.write_file(path, content, workspace=ws_name)
-                            result_entry["output"] = "已保存" if fr.get("success") else fr.get("error", "失败")
-                            result_entry["success"] = fr.get("success", False)
-                        else:
-                            result_entry["output"] = "工作区未初始化"
-
-                    elif func_name == "change_dir":
-                        target = args.get("path", "")
-                        result_entry["input"] = target
-                        if target == "..":
-                            if cwd:
-                                parts = cwd.rstrip("/").split("/")
-                                parts.pop()
-                                cwd = "/".join(parts)
-                        elif target.startswith("/"):
-                            cwd = target.lstrip("/")
-                        else:
-                            cwd = f"{cwd}/{target}".lstrip("/") if cwd else target
-                        cwd_parts = []
-                        for part in cwd.split("/"):
-                            if part == ".." and cwd_parts:
-                                cwd_parts.pop()
-                            elif part != "..":
-                                cwd_parts.append(part)
-                        cwd = "/".join(cwd_parts)
-                        result_entry["output"] = f"已切换到 {cwd or '(根目录)'}"
-                        result_entry["success"] = True
-
-                    elif func_name == "create_dir":
-                        dir_path = _resolve(args.get("path", ""))
-                        result_entry["input"] = dir_path
-                        if ws:
-                            fr = ws.write_file(f"{dir_path}/.gitkeep", "", workspace=ws_name)
-                            result_entry["output"] = "目录已创建"
-                            result_entry["success"] = True
-                        else:
-                            result_entry["output"] = "工作区未初始化"
-
-                    elif func_name == "execute_code":
-                        code = args.get("code", "")
-                        result_entry["input"] = code[:100]
-                        from ..sandbox import execute_with_safety_check as _exec_check
-                        import asyncio as _asyncio
-                        try:
-                            future = _asyncio.get_running_loop().run_in_executor(None, lambda: _exec_check(code))
-                            er = await _asyncio.wait_for(future, timeout=15)
-                            result_entry["output"] = er.stdout if er.success else (er.stderr or er.error or "")
-                            result_entry["success"] = er.success
-                            # 更新统计
-                            try:
-                                plugin._update_sandbox_stats(er.success, er.execution_time_ms)
-                            except Exception:
-                                pass
-                        except _asyncio.TimeoutError:
-                            result_entry["output"] = "执行超时"
-                        except Exception as e:
-                            result_entry["output"] = f"执行异常: {e}"
-
-                    else:
-                        result_entry["output"] = f"未知工具: {func_name}"
-
-                except Exception as e:
-                    result_entry["output"] = str(e)
-
-                round_results.append(result_entry)
-                all_tool_results.append(result_entry)
-
-            # 将本次工具调用加入对话历史（assistant 消息 + tool 结果）
-            assistant_tc_msg = {
-                "role": "assistant",
-                "content": "",
-                "tool_calls": [],
-            }
-            for tc in tool_calls:
-                if isinstance(tc, dict):
-                    assistant_tc_msg["tool_calls"].append({
-                        "id": tc.get("id", ""),
-                        "type": "function",
-                        "function": {
-                            "name": tc.get("function", {}).get("name", ""),
-                            "arguments": tc.get("function", {}).get("arguments", "{}"),
-                        },
-                    })
-            enhanced_messages.append(assistant_tc_msg)
-
-            for i, tr in enumerate(round_results):
-                tc_id = ""
-                if i < len(tool_calls):
-                    tc_id = tool_calls[i].get("id", "") if isinstance(tool_calls[i], dict) else getattr(tool_calls[i], "call_id", "")
-                enhanced_messages.append({
-                    "role": "tool",
-                    "content": f"[{tr['tool']}] {tr['output'][:2000]}",
-                    "tool_call_id": tc_id,
-                })
-        else:
-            # 超过 5 轮，用最后一次的回复
-            if not final_response:
-                final_response = response_text or "(达到最大轮次)"
-
-        error = result.get("error", "")
-
-        # 流式传输支持
-        if body.get("stream"):
-            import json as _sjson
-            import asyncio as _asyncio
-            resp = web.StreamResponse(status=200, reason="OK", headers={
-                "Content-Type": "text/event-stream",
-                "Cache-Control": "no-cache",
-                "Connection": "keep-alive",
-                "X-Accel-Buffering": "no",
-            })
-            await resp.prepare(request)
-            # 发送工具结果事件
-            for tr in all_tool_results:
-                line = f"event: tool\ndata: {_sjson.dumps(tr, ensure_ascii=False)}\n\n"
-                await resp.write(line.encode("utf-8"))
-            # 流式发送文本回复（逐段）
-            if final_response:
-                text = final_response
-                chunks = text.split(" ")
                 buf = ""
-                for chunk in chunks:
-                    buf += chunk + " "
-                    if len(buf) >= 30:
-                        await resp.write(f"event: text\ndata: {buf}\n\n".encode("utf-8"))
-                        buf = ""
-                        await _asyncio.sleep(0.02)
-                if buf.strip():
-                    await resp.write(f"event: text\ndata: {buf}\n\n".encode("utf-8"))
-            # 发送完成事件
-            await resp.write(f"event: done\ndata: {_sjson.dumps({'cwd': cwd, 'level': granted_level, 'level_name': level_names.get(granted_level, granted_level)}, ensure_ascii=False)}\n\n".encode("utf-8"))
-            # 保存聊天记录
-            _save_chat_history(messages, cwd, plugin)
-            return resp
+                await _asyncio.sleep(0.02)
+        if buf.strip():
+            await resp.write(
+                f"event: text\ndata: {buf}\n\n".encode("utf-8")
+            )
 
-        # 保存聊天记录
-        _save_chat_history(messages, cwd, plugin)
-
-        # 非流式：返回完整 JSON
-        return web.json_response({
-            "success": True,
-            "response": final_response or "",
-            "model": model,
-            "tool_results": all_tool_results,
-            "level": granted_level,
-            "level_name": level_names.get(granted_level, granted_level),
-            "cwd": cwd,
-            "ws_root": ws_root,
-        })
-    except Exception as e:
-        logger.error(f"对话生成失败: {e}")
-        return web.json_response({"success": False, "error": str(e)}, status=500)
+    # 完成事件
+    done_data = json.dumps(
+        {
+            "cwd": result.get("cwd", ""),
+            "level": result.get("level", ""),
+            "level_name": result.get("level_name", ""),
+        },
+        ensure_ascii=False,
+    )
+    await resp.write(f"event: done\ndata: {done_data}\n\n".encode("utf-8"))
+    return resp
 
 
 _CHAT_DIR = os.path.normpath(os.path.join(os.path.dirname(__file__), "..", "data", "chat"))
@@ -1401,118 +1116,3 @@ def _build_file_tree(base_path: str, workspace_dir: str) -> list:
     return tree
 
 
-async def _handle_token_compress(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
-    """手动触发缓存压缩。
-
-    Body (JSON) 可选:
-        threshold: 压缩阈值百分比（可选，仅调整不压缩）。
-        compress: 是否执行压缩（默认 true）。
-    """
-    import asyncio as _asyncio
-
-    try:
-        body = await request.json()
-    except Exception:
-        body = {}
-
-    do_compress = bool(body.get("compress", True))
-
-    if do_compress and plugin._cache:
-        # 记录压缩前状态
-        before = plugin._cache.estimate_tokens(plugin._cache._context_turns)
-        # 执行上下文裁剪：丢弃最旧轮次直到低于 50% 水位
-        max_tokens = plugin._cache._context_max_tokens
-        target = max_tokens // 2
-        removed = 0
-        while plugin._cache._context_turns and plugin._cache.estimate_tokens(plugin._cache._context_turns) > target:
-            if len(plugin._cache._context_turns) >= 2:
-                plugin._cache._context_turns.pop(0)
-                plugin._cache._context_turns.pop(0)
-                removed += 1
-            else:
-                plugin._cache._context_turns.pop(0)
-                removed += 1
-
-        after = plugin._cache.estimate_tokens(plugin._cache._context_turns)
-        freed = before - after
-
-        # 发布事件
-        if plugin._event_bus:
-            plugin._event_bus.publish("log", {
-                "message": f"🧹 上下文压缩完成，释放 {freed} tok（{removed} 轮次）",
-                "level": "info",
-            })
-
-        return web.json_response({
-            "success": True,
-            "freed": max(freed, 0),
-            "remaining": after,
-            "removed_rounds": removed,
-        })
-
-    # 仅查询状态
-    used = plugin._cache.estimate_tokens(plugin._cache._context_turns) if plugin._cache else 0
-    max_ctx = plugin._cache._context_max_tokens if plugin._cache else 8000
-    return web.json_response({
-        "success": True,
-        "compress": False,
-        "used": used,
-        "max": max_ctx,
-    })
-
-
-async def _handle_token_max_tokens(request: web.Request, plugin: "MaiStudyCodePlugin") -> web.Response:
-    """更新上下文最大 token 数并持久化到 config.toml。
-
-    Body (JSON):
-        max_tokens: int — 新的上限值。
-    """
-    try:
-        body = await request.json()
-    except Exception:
-        return web.json_response({"success": False, "error": "请求体不是有效 JSON"}, status=400)
-
-    new_max = int(body.get("max_tokens", 0) or 0)
-    if new_max < 512 or new_max > 1048576:
-        return web.json_response({"success": False, "error": "max_tokens 必须在 512 ~ 1048576 之间"}, status=400)
-
-    # 更新 config.toml
-    import os as _os
-    import tomllib as _tomllib
-    import tomlkit as _tomlkit
-
-    plugin_dir = _os.path.dirname(_os.path.dirname(_os.path.abspath(__file__)))
-    config_path = _os.path.join(plugin_dir, "config.toml")
-
-    try:
-        with open(config_path, "r", encoding="utf-8") as f:
-            doc = _tomlkit.load(f)
-        doc.setdefault("cache", {})["context_max_tokens"] = new_max
-        with open(config_path, "w", encoding="utf-8") as f:
-            f.write(_tomlkit.dumps(doc))
-    except Exception as e:
-        return web.json_response({"success": False, "error": f"写入配置失败: {e}"}, status=500)
-
-    # 更新运行时缓存配置
-    current_config = plugin.get_plugin_config_data()
-    if "cache" in current_config and isinstance(current_config["cache"], dict):
-        current_config["cache"]["context_max_tokens"] = new_max
-    # 如果插件实例有 _cache，直接设置上限
-    if plugin._cache:
-        plugin._cache._context_max_tokens = new_max
-
-    # 热重载插件配置
-    try:
-        await plugin.ctx.config.reload("self", plugin_id=plugin.ctx.plugin_id)
-    except Exception:
-        pass  # 即使重载失败也不影响已写入的配置
-
-    logger.info(f"上下文最大 token 已更新为 {new_max}")
-
-    if plugin._event_bus:
-        plugin._event_bus.publish("log", {
-            "message": f"⚙️ 上下文上限已更新为 {new_max} tok",
-            "level": "info",
-        })
-
-    return web.json_response({"success": True, "max_tokens": new_max})

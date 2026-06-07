@@ -37,10 +37,112 @@
 
 ## 架构设计
 
+### 整体定位
+
+```mermaid
+flowchart TB
+    subgraph Supervisor["Supervisor 进程管理"]
+        direction LR
+        S1[MaiBot 进程]
+        S2[mai_study_code 独立进程]
+    end
+
+    subgraph MaiBot["MaiBot 进程"]
+        P[mai_study_code 插件]
+        P -->|注册| T[execute_python<br>execute_shell<br>read_file 等 @Tool]
+        P -->|HTTP 调用| S2
+    end
+
+    subgraph AgentProc["mai_study_code 独立子进程"]
+        direction TB
+        M[main.py 入口]
+        M --> C[Config 本地配置]
+        M --> WS[Web 服务 aiohttp]
+        M --> AL[AgentLoop]
+        M --> SM[Sandbox / Cache<br>/ Risk / Learner]
+
+        AL -->|直调| API[DeepSeek API<br>OpenAI 兼容]
+        WS -->|路由| AL
+    end
+
+    T -->|Tool 结果| MaiMai[麦麦 Maisaka 主会话]
+    WS -->|WebUI| User[用户浏览器]
+
+    style Supervisor fill:#553C9A,color:#fff
+    style MaiBot fill:#2D3748,color:#fff
+    style AgentProc fill:#4A90D9,color:#fff
+```
+
+### 双入口交互模式
+
+```mermaid
+flowchart LR
+    subgraph Entry1["入口 1：日常对话（Maisaka）"]
+        direction TB
+        E1[用户发消息<br>"帮我算 1024*768"] --> E2{EventHandler<br>code_intent_detector}
+        E2 -->|正则匹配到表达式| E3[沙箱直接执行]
+        E2 -->|不匹配| E4[Maisaka Planner Loop]
+        E4 -->|LLM 决定| E5[调用 Tool<br>execute_python / read_file 等]
+        E3 --> E6[返回结果 · 麦麦回复]
+        E5 --> E6
+    end
+
+    subgraph Entry2["入口 2：WebUI 代码面板"]
+        direction TB
+        F1[用户打开浏览器] --> F2[右侧聊天面板发消息]
+        F2 --> F3[后端 _handle_chat]
+        F3 --> F4[注入工作区上下文 + 人设风格]
+        F4 --> F5[LLM 对话循环<br>最多 3 轮工具调用]
+        F5 --> F6{有工具调用？}
+        F6 -->|是| F7[执行 · 读文件 / 写文件 / 执行代码 / 切换目录]
+        F7 --> F5
+        F6 -->|否| F8[最终回复 · 保存到 data/chat/]
+    end
+
+    Entry1 -->|共享知识库| Knowledge
+    Entry2 -->|共享知识库| Knowledge
+```
+
+### 数据流：麦麦是如何"观察-总结-学习"的
+
+```mermaid
+flowchart LR
+    subgraph Execution["代码执行"]
+        S[沙箱 sandbox] -->|结果| T[Tool 输出]
+        S -->|事件| EB[事件总线 EventBus]
+    end
+
+    subgraph Observation["麦麦观察"]
+        EB -->|SSE 推送| UI[WebUI 监控面板]
+        CACHE[缓存管理 cache] -->|命中日志| DL[调试日志 debug_log]
+        DL -->|super_user 交互时推送| MAI[麦麦知道]
+    end
+
+    subgraph Learning2["麦麦学习"]
+        T -->|执行经验| KB[知识库 learner]
+        UI -->|人工总结| KB
+        KB -->|Skill / 笔记 / README| STORAGE[storage/]
+    end
+
+    subgraph Loop["闭环"]
+        STORAGE -->|下次更聪明| MAI
+        MAI -->|回复带知识点| USER[用户]
+    end
+
+    style Execution fill:#744C9C,color:#fff
+    style Observation fill:#D69E2E,color:#fff
+    style Learning2 fill:#38A169,color:#fff
+    style Loop fill:#4A90D9,color:#fff
+```
+
+### 项目目录结构
+
 ```
 plugins/mai_study_code/
 ├── _manifest.json          # 插件元数据 (Manifest v2)
-├── plugin.py               # 插件入口 (MaiBotPlugin)
+├── plugin.py               # 插件入口（精简版：注册 Tool + EventHandler）
+├── main.py                 # 独立进程入口（Supervisor 启动点）
+├── agent_config.toml       # 独立进程配置文件
 ├── README.md               # 本文件
 ├── config.toml             # 插件配置（不纳入 git）
 ├── data/                   # 运行时数据（不纳入 git）
@@ -52,6 +154,13 @@ plugins/mai_study_code/
 │   ├── limits.py           # 白名单/黑名单/资源限制配置
 │   ├── ast_checker.py      # AST 静态安全检查器
 │   └── executor.py         # 子进程隔离执行器
+├── agent/                  # 代码智能体核心（独立子进程运行）
+│   ├── __init__.py
+│   ├── config.py           # 独立配置管理（替代 plugin.config）
+│   ├── llm_client.py       # LLM API 直调（替代 plugin.ctx.llm）
+│   ├── web_server.py       # 自持 aiohttp 服务（替代 PluginWebServer）
+│   └── agent_loop.py       # LLM 对话循环 + 工具定义 + 工具执行
+│   └── agent_loop.py       # LLM 对话循环 + 工具定义 + 工具执行
 ├── cache/                  # 缓存管理模块
 │   ├── __init__.py
 │   ├── semantic_cache.py   # 本地精确缓存 + 消息前缀规范
@@ -66,7 +175,7 @@ plugins/mai_study_code/
 │   ├── __init__.py
 │   ├── event_bus.py        # 事件总线（SSE 推送）
 │   ├── server.py           # HTTP 服务器（aiohttp）+ 僵尸进程清理
-│   ├── routes.py           # 路由 + SSE + REST API（~1200行）
+│   ├── routes.py           # 路由 + SSE + REST API
 │   ├── page_builder.py     # Bot 页面管理器
 │   ├── monitor.html        # 监控面板入口
 │   ├── static/             # 前端静态文件
@@ -98,6 +207,21 @@ plugins/mai_study_code/
         ├── theme.css       # 主题皮肤（Bot 可修改）
         └── pages/          # Bot 自写页面目录
 ```
+
+### 与 Claude Code / Kilo Code 的根本区别
+
+| | Claude Code / Kilo Code | 麦麦学代码 |
+|---|---|---|
+| **定位** | 专业工具，替代程序员 | 学习伙伴，陪伴成长 |
+| **能力起点** | 顶级，开箱即用 | 从零开始，逐步进化 |
+| **交互模式** | 指令驱动 | 对话驱动 + 共同探索 |
+| **知识管理** | 无持久记忆 | 本地知识库（Skill/README/笔记） |
+| **风险态度** | 信任用户判断 | 主动识别风险，不确定时询问 |
+| **Token 消耗** | 无节制 | 缓存优先，精打细算 |
+| **人设** | 无（工具人格） | 附身麦麦（Arch Linux 守护精灵） |
+| **"观察"能力** | 无 | 通过事件总线 + 调试日志 + 知识库 |
+| **"学习"闭环** | 无 | 执行经验 → 知识库 → 下次更聪明 |
+| **归属** | 独立应用 | 麦麦插件，**是麦麦的一部分** |
 
 ### 核心模块
 
@@ -332,3 +456,11 @@ MaiBot 的 `PluginToolProvider` 通过 `component_query.py` 中的 `_get_tool_vi
 - [x] Phase 6：Tool visibility 修复（解决 LLM Function Call 不触发问题）
 - [ ] Phase 7：自进化策略（根据历史经验优化行为）
 - [ ] Phase 8：多语言支持、更多代码语言
+- [ ] Phase 9（架构重构）：智能体独立为 Supervisor 子进程
+  - [x] agent/ 模块抽离（config/llm_client/web_server/agent_loop）
+  - [x] main.py 独立进程入口
+  - [x] Supervisor 配置（main/server/supervisor/conf.d/mai_study_code_agent.conf）
+  - [x] 插件层降级（plugin.py 精简为 330 行，只注册 Tool + EventHandler）
+  - [x] WebUI 迁移到独立进程（监控面板 + API 全在 web_server.py）
+  - [ ] 插件层完全免插件运行（可选：纯 Supervisor 启动，不加插件也能跑 WebUI）
+  - [ ] Napcat 启动通知从插件层移至独立进程
