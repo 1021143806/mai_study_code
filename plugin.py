@@ -143,6 +143,10 @@ class MaiStudyCodePlugin(MaiBotPlugin):
         """插件卸载。"""
         logger.info("mai_study_code 精简版插件已卸载")
 
+    async def on_config_update(self, scope: str, config_data: dict[str, Any], version: str) -> None:
+        """配置热更新回调。"""
+        logger.info(f"mai_study_code 配置已更新: scope={scope}, version={version}")
+
     # ===== Tool: 执行 Python 代码 =====
 
     @Tool(
