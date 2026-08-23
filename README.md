@@ -336,7 +336,7 @@ plugins/mai_study_code/
 | **交互模式** | 对话驱动 + 共同探索 | 指令驱动 | 指令驱动（CLI / IDE 内对话） | 会话 / prompt / 工具调用（协议级） |
 | **宿主形态** | 麦麦插件（可独立 Web 进程） | 独立 CLI / IDE 插件 | 独立 CLI / IDE 插件 | 独立 harness（Web / CLI / ACP 可驱动） |
 | **持久记忆** | 本地知识库（Skill/README/笔记） | 会话级，机制闭源 | 会话级记忆 | Skill / Memory / Agent Notes / 会话持久化 |
-| **上下文清理** | TTL / LRU / 话题切换 / 丢最旧（不调 LLM） | 闭源，机制未公开 | **Compaction（开源）**：`compact` 命令 = "Summarize and compact the session"，**需指定模型（走 LLM 摘要）**；后端调用 `POST /api/session/{sessionID}/compact`，压缩结果含 `tail_start_id`（保留尾部，即最近对话）；有 `compactionLimit`（上下文达百分比自动触发） | **二级漏斗**：非 LLM `tool-result-pruner` 剪枝 + 必要时 LLM `compaction-basic` 摘要 |
+| **上下文清理** | TTL / LRU / 话题切换 / 丢最旧（不调 LLM） | 闭源，机制未公开 | **Compaction（开源二级）**：① 非 LLM 剪枝——`truncate()` 工具输出超 `TOOL_OUTPUT_MAX_CHARS(2000)` 截断为头+`[truncated]`，`select()` 按 `keep.tokens(默认8000)` 切分 head/recent；② LLM 摘要——对 head 调 LLM 生成结构化摘要（`SUMMARY_TEMPLATE`，`SUMMARY_OUTPUT_TOKENS=4096`，支持 `previousSummary` 增量合并）；`auto=true` 且上下文接近 `context-buffer(20000)` 触发 | **二级漏斗**：非 LLM `tool-result-pruner` 剪枝 + 必要时 LLM `compaction-basic` 摘要 |
 | **沙盒** | 自建 AST + ulimit + 目录隔离 | 内置沙箱 / 权限模型 | 内置沙箱 / 权限模型 | `sandbox-policy` 层次化（只读 / 工作区写 / 全权限） |
 | **扩展性** | 目录即模块（手动组织） | 插件 / 配置扩展 | 插件 / 配置扩展（开源可定制） | Cordis 微内核插件 + slots + 补丁热重载 |
 | **编排能力** | 无 | 有限（单 Agent + 工具） | 有限（单 Agent + 工具） | subagent / workflow / ralph 深度编排 |
@@ -344,9 +344,9 @@ plugins/mai_study_code/
 | **Token 效率** | 缓存优先，精打细算 | 依赖闭源优化 | Context Condensing + 模型优化 | compaction 分级 + token-meter 预算 |
 
 > **横向小结**：
-> - **Claude Code / Kilo Code** 是"开箱即用的编码工具"，强在体验与模型集成；**Kilo Code 是开源**（`Kilo-Org/kilocode`）。其上下文清理通过 **Compaction（压缩）** 实现——`compact` 命令即 "Summarize and compact the session"（**走 LLM 摘要**，需选模型），经 `POST /api/session/{sessionID}/compact` 后端执行，结果保留最近对话（`tail_start_id`）。**它更接近 DSH 的"LLM 摘要"那一级**，而 DSH 额外还有一级**非 LLM 的 `tool-result-pruner`**；Claude Code 则闭源、机制未公开；
+> - **Claude Code / Kilo Code** 是"开箱即用的编码工具"，强在体验与模型集成；**Kilo Code 是开源**（`Kilo-Org/kilocode`）。其上下文清理是 **Compaction（二级）**：非 LLM `truncate()` 剪掉超长工具输出 + `select()` 按 token 保 head/recent，再对 head 走 **LLM 结构化摘要**（`SUMMARY_TEMPLATE`），并支持 `previousSummary` 增量合并。**它和 DSH 的"非 LLM 剪枝 + LLM 摘要"二级漏斗是同构的**——两者思路高度一致（都是先剪掉工具输出细节、再对历史头部做语义摘要、保留最近对话）；Claude Code 则闭源、机制未公开；
 > - **麦麦学代码** 是"陪伴式自进化插件"，强调人设、记忆与风险意识，但受限于自造轮子的工程复杂度；
-> - **DSH** 是"正式 harness"，把其余三者想要的（Web 工作台、记忆闭环、可扩展）全部做到了**体系化、协议化、可自控**，尤其上下文清理采用"非 LLM 剪枝 + 必要时 LLM 摘要"的二级漏斗，既省 token 又保住工具结果细节与语义。
+> - **DSH** 是"正式 harness"，把其余三者想要的（Web 工作台、记忆闭环、可扩展）全部做到了**体系化、协议化、可自控**，上下文清理同样采用"非 LLM 剪枝 + 必要时 LLM 摘要"的二级漏斗，与 Kilo 思路同构，但更细粒度（`tool-result-pruner` 按 headChars/tailChars，`compaction-basic` 按 retainRatio 智能保留）。
 
 ### 核心模块
 
