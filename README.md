@@ -560,3 +560,10 @@ MaiBot 的 `PluginToolProvider` 通过 `component_query.py` 中的 `_get_tool_vi
   - [x] WebUI 迁移到独立进程（监控面板 + API 全在 web_server.py）
   - [ ] 插件层完全免插件运行（可选：纯 Supervisor 启动，不加插件也能跑 WebUI）
   - [ ] Napcat 启动通知从插件层移至独立进程
+- [x] Phase 10（项目切换与归档）：研究 DSH 后确认其架构正是本项目的构想，切换开发方向并归档
+  - [x] DeepSeek Harness（DSH）出现，经约一周研究验证架构一致
+  - [x] 开发 maibot_dsh_bridge（麦麦 × DSH 桥接插件：ACP + HTTP POST 双通信）
+  - [x] 开发 dsh-postapi-bridge（DSH 统一网关与鉴权：/api/dsh/v1 纯 POST 通道）
+  - [x] 调试/运维重心转移至 DSH 生态，本仓库 README 补充 DSH 架构对比与归档说明
+  - [x] 仓库归档（保留完整历史作为架构探索里程碑）
+  - [ ] Phase 9 遗留的未完成项（免插件运行 / Napcat 通知迁移）随本仓库归档而定格，不再继续实现
