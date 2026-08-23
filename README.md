@@ -125,7 +125,7 @@ flowchart TB
 flowchart LR
     subgraph Entry1["入口 1：日常对话（Maisaka）"]
         direction TB
-        E1[用户发消息<br>"帮我算 1024*768"] --> E2{EventHandler<br>code_intent_detector}
+        E1[用户发消息<br>帮我算 1024 乘 768] --> E2{EventHandler<br>code_intent_detector}
         E2 -->|正则匹配到表达式| E3[沙箱直接执行]
         E2 -->|不匹配| E4[Maisaka Planner Loop]
         E4 -->|LLM 决定| E5[调用 Tool<br>execute_python / read_file 等]
