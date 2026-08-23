@@ -89,14 +89,15 @@ flowchart TB
 
 ### 🔗 当前落地项目（替代本仓库）
 
-本仓库的架构构想已通过以下两个项目正式落地：
+本仓库的架构构想已通过 **DSH 及其两个落地插件** 正式实现：
 
 | 项目 | 说明 | 地址 |
 | :--- | :--- | :--- |
+| **DeepSeek Harness（DSH）** | 本仓库架构构想的"正式成品"：Cordis 微内核「一切皆插件」的 Agent 编排 harness，提供 Web 工作台 + 重型智能体 + 自进化记忆闭环。 | https://github.com/deepseek-ai/deepseek-harness.git |
 | **maibot_dsh_bridge** | 麦麦 × DSH 桥接插件：通过原生 ACP（stdio JSON-RPC）与 HTTP POST 双通信模式，将 DeepSeek Harness 的重型智能体能力（代码编写、系统排查、Sandbox 执行、深色卡片报告交付）完整接入 MaiBot/QQ。 | https://github.com/ptrel1/maibot_dsh_bridge.git |
 | **dsh-postapi-bridge** | DSH 统一网关与鉴权桥梁插件：为外部系统与机器人提供开箱即用的 HTTP POST / RESTful API 网关，同时提供 Web 多账号安全认证与用户管理（`/api/dsh/v1/*` 免 Cookie 纯 POST 通道）。 | https://github.com/ptrel1/dsh-postapi-bridge.git |
 
-> 两个项目同属 DSH 生态：`maibot_dsh_bridge` 负责"麦麦客户端"这一侧，`dsh-postapi-bridge` 负责"DSH 服务端网关"这一侧，一进一出共同完成麦麦接入 DSH 的完整闭环。
+> 三者同属 DSH 生态：**DSH** 是底层 harness，`maibot_dsh_bridge` 负责"麦麦客户端"这一侧（接入 DSH），`dsh-postapi-bridge` 负责"DSH 服务端网关"这一侧（开放 API），一进一出共同完成麦麦接入 DSH 的完整闭环。
 
 ---
 
