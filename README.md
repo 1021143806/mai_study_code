@@ -330,23 +330,23 @@ plugins/mai_study_code/
 
 把三者放到一起横向比较，能更清晰地看出"独立工具 / 陪伴式插件 / 正式 harness"三条不同路线：
 
-| 维度 | 麦麦学代码（前身原型） | Claude Code / Kilo Code（商业 Coding 工具） | DeepSeek Harness（DSH，成品） |
-| :--- | :--- | :--- | :--- |
-| **定位** | 麦麦的代码学习伙伴 | 专业 AI 编程工具，替代程序员 | 通用 Agent 编排 harness |
-| **交互模式** | 对话驱动 + 共同探索 | 指令驱动（命令行 / IDE 内对话） | 会话 / prompt / 工具调用（协议级） |
-| **宿主形态** | 麦麦插件（可独立 Web 进程） | 独立 CLI / IDE 插件 | 独立 harness（Web / CLI / ACP 可驱动） |
-| **持久记忆** | 本地知识库（Skill/README/笔记） | 无明显持久记忆 | Skill / Memory / Agent Notes / 会话持久化 |
-| **上下文清理** | TTL / LRU / 话题切换 / 丢最旧（不调 LLM） | 闭源；由模型自主取舍，机制未公开 | **二级漏斗**：非 LLM `tool-result-pruner` 剪枝 + 必要时 LLM `compaction-basic` 摘要 |
-| **沙盒** | 自建 AST + ulimit + 目录隔离 | 内置沙箱 / 权限模型 | `sandbox-policy` 层次化（只读 / 工作区写 / 全权限） |
-| **扩展性** | 目录即模块（手动组织） | 插件 / 配置扩展 | Cordis 微内核插件 + slots + 补丁热重载 |
-| **编排能力** | 无 | 有限（单 Agent + 工具） | subagent / workflow / ralph 深度编排 |
-| **风险态度** | 主动识别风险，不确定时询问 | 信任用户判断为主 | 层次化权限 + 危险指令分级拦截 |
-| **Token 效率** | 缓存优先，精打细算 | 依赖闭源优化 | compaction 分级 + token-meter 预算 |
+| 维度 | 麦麦学代码（前身原型） | Claude Code（闭源） | Kilo Code（开源） | DeepSeek Harness（DSH，成品） |
+| :--- | :--- | :--- | :--- | :--- |
+| **定位** | 麦麦的代码学习伙伴 | 商业 AI 编程工具 | 开源 AI 编程工具（`Kilo-Org/kilocode`） | 通用 Agent 编排 harness |
+| **交互模式** | 对话驱动 + 共同探索 | 指令驱动 | 指令驱动（CLI / IDE 内对话） | 会话 / prompt / 工具调用（协议级） |
+| **宿主形态** | 麦麦插件（可独立 Web 进程） | 独立 CLI / IDE 插件 | 独立 CLI / IDE 插件 | 独立 harness（Web / CLI / ACP 可驱动） |
+| **持久记忆** | 本地知识库（Skill/README/笔记） | 会话级，机制闭源 | 会话级记忆 | Skill / Memory / Agent Notes / 会话持久化 |
+| **上下文清理** | TTL / LRU / 话题切换 / 丢最旧（不调 LLM） | 闭源，机制未公开 | **Context Condensing（开源）**：保留早期任务上下文 + 最近对话，对中间历史做压缩/截断（近似"头 + 尾"保留） | **二级漏斗**：非 LLM `tool-result-pruner` 剪枝 + 必要时 LLM `compaction-basic` 摘要 |
+| **沙盒** | 自建 AST + ulimit + 目录隔离 | 内置沙箱 / 权限模型 | 内置沙箱 / 权限模型 | `sandbox-policy` 层次化（只读 / 工作区写 / 全权限） |
+| **扩展性** | 目录即模块（手动组织） | 插件 / 配置扩展 | 插件 / 配置扩展（开源可定制） | Cordis 微内核插件 + slots + 补丁热重载 |
+| **编排能力** | 无 | 有限（单 Agent + 工具） | 有限（单 Agent + 工具） | subagent / workflow / ralph 深度编排 |
+| **风险态度** | 主动识别风险，不确定时询问 | 信任用户判断为主 | 信任用户判断为主 | 层次化权限 + 危险指令分级拦截 |
+| **Token 效率** | 缓存优先，精打细算 | 依赖闭源优化 | Context Condensing + 模型优化 | compaction 分级 + token-meter 预算 |
 
 > **横向小结**：
-> - **Claude Code / Kilo Code** 是"开箱即用的商业工具"，强在体验与模型集成，但记忆与上下文清理机制闭源、不可深挖；
+> - **Claude Code / Kilo Code** 是"开箱即用的编码工具"，强在体验与模型集成；**Kilo Code 是开源**（`Kilo-Org/kilocode`），其上下文清理通过 **Context Condensing（压缩）** 实现——保留早期任务上下文 + 最近对话、中间历史压缩，与 DSH 的"头 + 尾保留"思路相近，但主要作用于**整个会话历史**而非单个工具结果；Claude Code 则闭源、机制未公开；
 > - **麦麦学代码** 是"陪伴式自进化插件"，强调人设、记忆与风险意识，但受限于自造轮子的工程复杂度；
-> - **DSH** 是"正式 harness"，把其余两者想要的（Web 工作台、记忆闭环、可扩展）全部做到了**体系化、协议化、可自控**，尤其上下文清理采用"非 LLM 剪枝 + 必要时 LLM 摘要"的二级漏斗，比"直接丢 Cache"更保真。
+> - **DSH** 是"正式 harness"，把其余三者想要的（Web 工作台、记忆闭环、可扩展）全部做到了**体系化、协议化、可自控**，尤其上下文清理采用"非 LLM 剪枝 + 必要时 LLM 摘要"的二级漏斗，既省 token 又保住工具结果细节与语义。
 
 ### 核心模块
 
