@@ -21,7 +21,57 @@
 | Sandbox / 风险规避 | `dsh-sandbox-local` + 权限策略 | 更完整的安全体系 |
 | 本地知识库 / 自进化 | Skill / Memory / Agent Notes 闭环 | 更系统的记忆沉淀 |
 
-**一句话**：这个项目的架构与 DSH 相似度约 **70%~75%**，是 DSH 的"精简早期验证版"；它在 `AgentLoop / WebServer / Sandbox / 事件总线` 这几大件上已经独立搭好了骨架，差距主要在**插件化协议、深度编排、记忆闭环**这些 DSH 的灵魂层面。
+### 🧱 DSH 简要架构图（与本项目对比）
+
+DeepSeek Harness（DSH）采用 **Cordis 微内核「一切皆插件」** 的架构，其核心可简化为以下分层：
+
+```mermaid
+flowchart TB
+    subgraph Host["DSH 宿主（Node.js 服务端进程）"]
+        direction TB
+        Core[core 微内核 + Agent 循环<br>agent-loop / agent / session / system-prompt]
+        LLM[llm 服务<br>provider 适配：deepseek / pi-ai / replay]
+        Sandbox2[sandbox-policy<br>read-only / workspace-write / danger-full-access]
+        Tools[tools 目录<br>bash / fs / web / subagent / workflow / skill...]
+        Memory2[记忆闭环<br>skill / memory / agent-notes / 持久化 session]
+    end
+
+    subgraph Client["浏览器半侧（Web SPA）"]
+        GUI[Web 工作台<br>工作区树 + 会话树 + 代码高亮 + 设置面板]
+        Slot[插件插槽 slots<br>shell.overlay / sidebar / conversation / settings]
+    end
+
+    subgraph External["外部接入"]
+        ACP[ACP 自动化协议<br>stdio JSON-RPC]
+        POST[HTTP POST 网关<br>dsh-postapi-bridge]
+        maibot[麦麦桥接<br>maibot_dsh_bridge]
+    end
+
+    Core --> Tools
+    Core --> LLM
+    Core --> Sandbox2
+    Core --> Memory2
+    Host <--> GUI
+    GUI --> Slot
+    ACP --> Host
+    POST --> Host
+    maibot --> ACP
+    maibot --> POST
+```
+
+**DSH 分层说明**：
+
+| 层 | 职责 |
+| :--- | :--- |
+| **core 微内核**（agent-loop / agent / session） | 驱动 Agent 循环、会话与系统提示词组装 |
+| **llm 服务** | 统一的模型 Provider 适配（deepseek / maiapi2 / replay） |
+| **sandbox-policy** | 层次化沙盒：只读 / 工作区写 / 全权限 |
+| **tools 目录** | 模型可调用的全套工具：bash、fs、web、subagent、workflow、skill 等 |
+| **记忆闭环** | Skill / Memory / Agent Notes / 持久化会话 |
+| **浏览器半侧** | Web 工作台 + 声明式插件插槽（`ctx.slots`） |
+| **外部接入** | ACP 自动化协议 + HTTP POST 网关 + 麦麦桥接插件 |
+
+> **对比小结**：`mai_study_code` 的 `agent/`、`web/`、`workspace/`、`sandbox/`、`knowledge/` 正好对应 DSH 的 `core`、Web GUI、workspace、`sandbox-policy`、记忆闭环。区别在于 DSH 把这些都**抽象成了可插拔的正式服务与协议**，并用 `ctx.effect` / `ctx.slots` / 补丁层叠实现了热重载与生命周期管理——这正是 `mai_study_code` 当时"造不完"的那部分。
 
 ### 🏗️ 这段探索的完整历史
 
