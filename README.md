@@ -37,6 +37,17 @@
 
 > 这段"从插件 → 独立 Web → 放弃自造 → **遇 DSH 验证→ 开发连接器接入 MaiBot**"的探索，是个人对 AI 工程化工具设计的宝贵验证，也印证了"优先采用成熟体系、避免重复造轮子"的价值——当初的架构构想没有白费，它最终通过 DSH + 连接器的方式得以完整落地。
 
+### 🔗 当前落地项目（替代本仓库）
+
+本仓库的架构构想已通过以下两个项目正式落地：
+
+| 项目 | 说明 | 地址 |
+| :--- | :--- | :--- |
+| **maibot_dsh_bridge** | 麦麦 × DSH 桥接插件：通过原生 ACP（stdio JSON-RPC）与 HTTP POST 双通信模式，将 DeepSeek Harness 的重型智能体能力（代码编写、系统排查、Sandbox 执行、深色卡片报告交付）完整接入 MaiBot/QQ。 | https://github.com/ptrel1/maibot_dsh_bridge.git |
+| **dsh-postapi-bridge** | DSH 统一网关与鉴权桥梁插件：为外部系统与机器人提供开箱即用的 HTTP POST / RESTful API 网关，同时提供 Web 多账号安全认证与用户管理（`/api/dsh/v1/*` 免 Cookie 纯 POST 通道）。 | https://github.com/ptrel1/dsh-postapi-bridge.git |
+
+> 两个项目同属 DSH 生态：`maibot_dsh_bridge` 负责"麦麦客户端"这一侧，`dsh-postapi-bridge` 负责"DSH 服务端网关"这一侧，一进一出共同完成麦麦接入 DSH 的完整闭环。
+
 ---
 
 ## 最初构想
