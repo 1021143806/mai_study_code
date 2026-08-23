@@ -119,17 +119,6 @@ flowchart TB
 
 4. **自进化**：每次解决问题的经验要沉淀下来，踩过的坑要记住。麦麦应该越用越聪明。
 
-### 与 Claude Code / Kilo Code 的根本区别
-
-| | Claude Code / Kilo Code | 麦麦学代码 |
-|---|---|---|
-| **定位** | 专业工具，替代程序员 | 学习伙伴，陪伴成长 |
-| **能力起点** | 顶级，开箱即用 | 从零开始，逐步进化 |
-| **交互模式** | 指令驱动 | 对话驱动 + 共同探索 |
-| **知识管理** | 无持久记忆 | 本地知识库（Skill/README/笔记） |
-| **风险态度** | 信任用户判断 | 主动识别风险，不确定时询问 |
-| **Token 消耗** | 无节制 | 缓存优先，精打细算 |
-
 ---
 
 ## 架构设计
@@ -319,6 +308,23 @@ plugins/mai_study_code/
 | **"观察"能力** | 无 | 通过事件总线 + 调试日志 + 知识库 |
 | **"学习"闭环** | 无 | 执行经验 → 知识库 → 下次更聪明 |
 | **归属** | 独立应用 | 麦麦插件，**是麦麦的一部分** |
+
+### 与 DSH 的根本区别（架构继承对比）
+
+| | 麦麦学代码（前身原型） | DeepSeek Harness（DSH，成品） |
+|---|---|---|
+| **Agent 驱动** | `agent/agent_loop.py`（自建 AgentLoop） | `packages/core/agent-loop`（抽象 Agent 循环） |
+| **Web 工作台** | `web/static/` Monaco 编辑器 + 侧边栏 + 仪表盘 | DSH Web GUI（工作区树 + 会话树 + 代码高亮） |
+| **工程组织** | 目录即模块（`agent/` `tools/` `workspace/`...） | workspace / session / preset / skill 形式化抽象 |
+| **事件流** | `web/event_bus.py`（SSE 实时推送） | 会话事件投影 / 实时事件流 |
+| **沙盒** | `sandbox/` 自建 AST + ulimit + 目录隔离 | `sandbox-policy` 层次化（只读 / 工作区写 / 全权限） |
+| **扩展机制** | 目录即模块（手动组织） | Cordis 微内核插件 + `ctx.effect` / `ctx.slots` / 补丁层叠 / 热重载 |
+| **模型适配** | `agent/llm_client.py`（有限 provider） | `ctx.llm` 服务 + 多 provider（deepseek / pi-ai / replay） |
+| **记忆闭环** | `learner/` + `knowledge/`（部分） | Skill / Memory / Agent Notes / 持久化会话 |
+| **编排能力** | 无 | subagent / workflow / ralph 深度编排 |
+| **相似度结论** | — | 架构骨架相似度约 **70%~75%**，差距在"插件协议 / 深度编排 / 记忆闭环" |
+
+> **一句话**：`mai_study_code` 是 DSH 的"精简早期验证版"，它把 Agent 循环、Web 工作台、沙盒、事件总线这几大件搭好了骨架；DSH 则在同样理念之上，把它们抽象成了**可插拔的正式服务与协议**，并用 `ctx.effect` / `ctx.slots` / 补丁层叠实现了热重载与生命周期管理——这正是 `mai_study_code` 当时"造不完"的那部分。
 
 ### 核心模块
 
